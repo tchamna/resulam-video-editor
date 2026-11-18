@@ -11,9 +11,15 @@ npm install
 npm run dev
 ```
 
-Open the local address printed by Vite. `npm run build` type-checks the project and creates a production build in `dist/`. If you downloaded the ZIP and just want to try the editor, open `Resulam-Video-Editor.html` in your browser.
+Open the local address printed by Vite. `npm run build` type-checks the project and creates a production build in `dist/`.
 
 Run `npm test` to check timeline cuts, ripple delete, split and move, annotation editing, and canvas sizing.
+
+## Portable Windows app
+
+Extract the entire Windows x64 release ZIP, then open `ReViE.exe` inside the extracted `ReViE` folder. The editor bundles its runtime and works offline. Keep the files alongside the EXE when moving or sharing it.
+
+To build the portable folder on Windows x64, run `npm ci`, `npm run build`, `npm --prefix desktop ci`, and `npm --prefix desktop run package:windows`. The last command prints the output folder. Package the entire `ReViE` folder for distribution.
 
 ## Edit a tutorial
 

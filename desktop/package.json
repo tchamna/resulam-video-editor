@@ -1,0 +1,12 @@
+{
+  "name": "revie-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "package:windows": "node package-windows.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.3.4"
+  }
+}
