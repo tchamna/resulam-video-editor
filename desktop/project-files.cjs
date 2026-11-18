@@ -12,13 +12,13 @@ function registerProjectFiles(window) {
 
   async function finish(commit) {
     if (!transfer) return
-    const { file, temporary, folder, destination } = transfer
+    const { file, temporary, folder, destination, extension } = transfer
     try {
       if (commit) await file.sync()
       await file.close()
       if (commit) {
         await rename(temporary, destination)
-        lastPath = destination
+        if (extension === 'revie') lastPath = destination
       }
     } finally {
       await file.close().catch(() => {})
@@ -28,14 +28,18 @@ function registerProjectFiles(window) {
     }
   }
 
-  ipcMain.handle('project:begin-save', async (event, name, reuse) => {
-    if (!ownWindow(event) || opening || transfer || typeof name !== 'string' || name !== basename(name) || !name.endsWith('.revie')) return false
+  ipcMain.handle('project:begin-save', async (event, name, reuse, extension = 'revie') => {
+    if (!ownWindow(event) || opening || transfer || !['revie', 'mp4'].includes(extension) ||
+      typeof name !== 'string' || name !== basename(name) || !name.endsWith(`.${extension}`)) return false
+    const isProject = extension === 'revie'
     opening = true
     try {
-      let destination = reuse === true ? lastPath : undefined
+      let destination = isProject && reuse === true ? lastPath : undefined
       if (!destination) {
         const choice = await dialog.showSaveDialog(window, {
-          title: 'Save ReViE project', defaultPath: name, filters: [{ name: 'ReViE project', extensions: ['revie'] }],
+          title: isProject ? 'Save ReViE project' : 'Export MP4',
+          defaultPath: name,
+          filters: [{ name: isProject ? 'ReViE project' : 'MP4 video', extensions: [extension] }],
         })
         if (choice.canceled || !choice.filePath) return false
         destination = choice.filePath
@@ -43,7 +47,7 @@ function registerProjectFiles(window) {
       const folder = await mkdtemp(join(dirname(destination), '.revie-save-'))
       const temporary = join(folder, 'project.tmp')
       try {
-        transfer = { destination, folder, temporary, file: await open(temporary, 'wx') }
+        transfer = { destination, folder, temporary, extension, file: await open(temporary, 'wx') }
       } catch (error) {
         await rmdir(folder).catch(() => {})
         throw error

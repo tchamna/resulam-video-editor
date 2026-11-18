@@ -44,7 +44,7 @@ Open the app in a supported desktop browser on localhost or HTTPS for screen sha
 
 MP4 export uses the browser’s native encoder and follows the canvas dimensions. Demo projects use 1280 × 720. Keep the tab visible during the real-time export. Use a browser with native MP4 encoding support, such as a current desktop Chrome or Edge.
 
-Choose **Export selection** below the timeline to export the selected time range with all visible layers. The header **Export MP4** button exports the full project.
+Choose **Export selection** below the timeline to export the selected time range with all visible layers. The header **Export MP4** button exports the full project. In the desktop app, Chrome, or Edge, choose the MP4 filename and folder in the Save dialog before rendering begins.
 
 Save editable projects with **Ctrl+S**. A `.revie` file includes your clips, media, captions, tracks, and markers. Open it with **Ctrl+O**. ReViE prompts for unsaved changes before replacing a project or closing the desktop app. The browser shows its own warning when a tab with unsaved changes is closed or refreshed.
 

@@ -1,21 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { decodeProject, encodeProject, projectSnapshot, sameProject } from './projectFile'
+import { writeDesktopFile } from './saveFile'
 import { type Project, useEditor } from './store'
-
-type Desktop = {
-  beginSave: (name: string, reuse: boolean) => Promise<boolean>
-  writeChunk: (data: ArrayBuffer) => Promise<void>
-  finishSave: (commit: boolean) => Promise<void>
-  onCloseRequest: (handle: () => void) => () => void
-  closeWindow: () => void
-}
-type SavePicker = (options: { suggestedName: string; types: { description: string; accept: Record<string, string[]> }[] }) => Promise<FileSystemFileHandle>
-declare global {
-  interface Window {
-    revieDesktop?: Desktop
-    showSaveFilePicker?: SavePicker
-  }
-}
 
 export type ProjectFileControls = { save: (as?: boolean) => void; open: () => void; newProject: () => void }
 type Pending = { kind: 'new' | 'close' } | { kind: 'open'; file: File }
@@ -112,11 +98,7 @@ export function ProjectFiles({ ref, blocked, onNewProject, notice, onDirty }: {
       if (desktop) {
         if (!await desktop.beginSave(name, desktopDestination.current && !saveAs)) return
         staged = true
-        const file = await encodeProject(snapshot)
-        const chunk = 4 * 1024 * 1024
-        for (let offset = 0; offset < file.size; offset += chunk) {
-          await desktop.writeChunk(await file.slice(offset, offset + chunk).arrayBuffer())
-        }
+        await writeDesktopFile(desktop, await encodeProject(snapshot))
         await desktop.finishSave(true)
         staged = false
         desktopDestination.current = true

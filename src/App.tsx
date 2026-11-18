@@ -5,6 +5,7 @@ import { exportMP4, importFile } from './media'
 import { Inspector } from './Inspector'
 import { Preview, togglePlayback } from './Preview'
 import { ProjectFiles, type ProjectFileControls } from './ProjectFiles'
+import { writeDesktopFile } from './saveFile'
 import { Sidebar, type SidebarTab } from './Sidebar'
 import { Timeline, type TimelineControls } from './Timeline'
 import { ToolButton } from './ui'
@@ -33,6 +34,7 @@ export function App() {
   const [recordingPaused, setRecordingPaused] = useState(false)
   const [recordPending, setRecordPending] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [choosingExport, setChoosingExport] = useState(false)
   const [progress, setProgress] = useState<number | null>(null)
   const [menu, setMenu] = useState(false)
   const [fileDrag, setFileDrag] = useState(false)
@@ -43,7 +45,7 @@ export function App() {
   const canUndo = useEditor(s => s.past.length > 0)
   const canRedo = useEditor(s => s.future.length > 0)
   const hasClips = useEditor(s => s.clips.length > 0)
-  const exporting = progress !== null
+  const exporting = choosingExport || progress !== null
   const exportDisabled = exporting || recording || recordPending || importing || !hasClips
 
   function copySelection(cut = false) {
@@ -329,19 +331,53 @@ export function App() {
     const state = useEditor.getState()
     const bounds = selectionOnly && state.range ? rangeBounds(state.range) : undefined
     if (selectionOnly && (!bounds || bounds.end - bounds.start < FRAME)) return
+    const desktop = window.revieDesktop
+    const name = state.title.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').slice(0, 150).replace(/[. ]+$/, '') || 'Tutorial'
+    const suffix = bounds ? `-${bounds.start.toFixed(2)}-${bounds.end.toFixed(2)}s` : ''
+    const filename = `${name}${suffix}.mp4`
     const controller = new AbortController()
     exportController.current = controller
-    useEditor.getState().play(false)
-    setProgress(0)
+    let desktopTransfer = false
+    let stream: FileSystemWritableFileStream | undefined
+    setChoosingExport(true)
     try {
+      if (desktop) {
+        desktopTransfer = await desktop.beginExport(filename)
+        if (!desktopTransfer) return
+      } else {
+        if (!window.showSaveFilePicker) throw new Error('Use Chrome, Edge, or the ReViE desktop app to choose an export location.')
+        const destination = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }],
+        })
+        stream = await destination.createWritable()
+      }
+      state.play(false)
+      setProgress(0)
+      setChoosingExport(false)
       const blob = await exportMP4(value => setProgress(Math.floor(value * 100)), controller.signal, bounds)
-      const name = title.trim().replace(/[<>:"/\\|?*]/g, '-') || 'Tutorial'
-      const suffix = bounds ? `-${bounds.start.toFixed(2)}-${bounds.end.toFixed(2)}s` : ''
-      saveFile(blob, `${name}${suffix}.mp4`)
+      controller.signal.throwIfAborted()
+      if (desktop) {
+        await writeDesktopFile(desktop, blob, controller.signal)
+        controller.signal.throwIfAborted()
+        await desktop.finishSave(true)
+        desktopTransfer = false
+      } else if (stream) {
+        await stream.write(blob)
+        controller.signal.throwIfAborted()
+        await stream.close()
+        stream = undefined
+      }
       setNotice(bounds ? 'Selected range exported.' : 'MP4 export complete.')
     } catch (error) {
       if ((error as Error).name !== 'AbortError') setNotice((error as Error).message)
-    } finally { exportController.current = null; setProgress(null) }
+    } finally {
+      if (desktopTransfer) await desktop?.finishSave(false).catch(() => {})
+      if (stream) await stream.abort().catch(() => {})
+      exportController.current = null
+      setChoosingExport(false)
+      setProgress(null)
+    }
   }
 
   function newProject() {
@@ -412,7 +448,7 @@ export function App() {
     <Timeline ref={timeline} disabled={exporting} copySelection={copySelection} exportDisabled={exportDisabled} exportSelection={() => void exportProject(true)} />
     {notice && <div className="toast" role="status"><span>{notice}</span><ToolButton label="Dismiss notification" onClick={() => setNotice('')}><X size={16} /></ToolButton></div>}
     {fileDrag && <div className="file-drop"><FolderUp size={34} /><strong>Drop files to import media</strong></div>}
-    {exporting && <div className="modal-backdrop">
+    {progress !== null && <div className="modal-backdrop">
       <div className="export-dialog" role="dialog" aria-modal="true" aria-label="Exporting project">
         <div className="export-dialog-icon"><Download size={21} /></div><h2>Exporting MP4</h2>
         <p>Keep this tab open while ReViE renders your video.</p>
