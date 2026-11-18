@@ -45,9 +45,10 @@ export function stopMedia() {
 
 export function preloadMedia() {
   const state = useEditor.getState()
-  const clipsById = new Set(state.clips.map(clip => clip.id))
+  const assetsById = new Map(state.assets.map(asset => [asset.id, asset]))
+  const sources = new Map(state.clips.map(clip => [clip.id, clip.assetId && assetsById.get(clip.assetId)?.url]))
   for (const [id, layer] of layers) {
-    if (!clipsById.has(id)) {
+    if (sources.get(id) !== layer.el.getAttribute('src')) {
       layer.el.pause()
       layer.gain?.disconnect()
       layer.el.removeAttribute('src')
@@ -55,8 +56,11 @@ export function preloadMedia() {
       layers.delete(id)
     }
   }
+  for (const [id, image] of images) {
+    if (assetsById.get(id)?.url !== image.getAttribute('src')) images.delete(id)
+  }
   for (const clip of state.clips) {
-    const asset = state.assets.find(a => a.id === clip.assetId)
+    const asset = clip.assetId ? assetsById.get(clip.assetId) : undefined
     if (!asset?.url) continue
     if (clip.kind === 'video' || clip.kind === 'audio') mediaFor(clip, asset)
     if (clip.kind === 'image') imageFor(asset)
@@ -416,7 +420,7 @@ export async function importFile(file: File, recordedDuration?: number): Promise
   const kind = ext === 'png' ? 'image' : ext === 'mp3' ? 'audio' : ['mp4', 'webm'].includes(ext ?? '') ? 'video' : null
   if (!kind) throw new Error(`Unsupported file type: ${file.name}`)
   const url = URL.createObjectURL(file)
-  const asset: Asset = { id: crypto.randomUUID(), name: file.name, kind, duration: 5, url }
+  const asset: Asset = { id: crypto.randomUUID(), name: file.name, kind, duration: 5, url, file }
   try {
     if (kind === 'image') {
       const image = imageFor(asset)

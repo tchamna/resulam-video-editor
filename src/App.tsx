@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
-import { ChevronDown, Circle, Download, Film, FolderUp, Plus, Redo2, Square, Undo2, X } from 'lucide-react'
+import { ChevronDown, Circle, Download, Film, FolderOpen, FolderUp, Plus, Redo2, Save, Square, Undo2, X } from 'lucide-react'
 import { type Asset, clamp, durationOf, FRAME, playbackBounds, rangeBounds, timecode, useEditor } from './store'
 import { exportMP4, importFile } from './media'
 import { Inspector } from './Inspector'
 import { Preview, togglePlayback } from './Preview'
+import { ProjectFiles, type ProjectFileControls } from './ProjectFiles'
 import { Sidebar, type SidebarTab } from './Sidebar'
 import { Timeline, type TimelineControls } from './Timeline'
 import { ToolButton } from './ui'
@@ -23,9 +24,11 @@ export function App() {
   const previewCanvas = useRef<HTMLCanvasElement>(null)
   const spaceGesture = useRef({ held: false, dragged: false })
   const timeline = useRef<TimelineControls>(null)
+  const projectFiles = useRef<ProjectFileControls>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const exportController = useRef<AbortController | null>(null)
   const [notice, setNotice] = useState('')
+  const [projectDirty, setProjectDirty] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordingPaused, setRecordingPaused] = useState(false)
   const [recordPending, setRecordPending] = useState(false)
@@ -72,10 +75,12 @@ export function App() {
     }
 
     function shortcuts(event: KeyboardEvent) {
-      if (event.defaultPrevented || exporting || editingText(event)) return
+      if (event.defaultPrevented || exporting || event.isComposing) return
       const target = event.target instanceof Element ? event.target : null
       const action = shortcutFor(event)
       if (!action || action === 'play') return
+      const projectCommand = action === 'save' || action === 'saveAs' || action === 'open' || action === 'new'
+      if (target?.closest('dialog') || (!projectCommand && editingText(event))) return
       event.preventDefault()
       const repeatable = action.startsWith('frame') && action !== 'frame' ||
         action.startsWith('extend') || ['zoomIn', 'zoomOut', 'heightUp', 'heightDown'].includes(action)
@@ -189,7 +194,10 @@ export function App() {
           else if (!recordPending) void recordScreen()
           break
         case 'stopRecord': if (recorder.current && recorder.current.state !== 'inactive') recorder.current.stop(); break
-        case 'new': if (!recording && !recordPending && !importing) newProject(); break
+        case 'new': projectFiles.current?.newProject(); break
+        case 'open': projectFiles.current?.open(); break
+        case 'save': projectFiles.current?.save(); break
+        case 'saveAs': projectFiles.current?.save(true); break
         case 'frame': {
           if (!hasClips) break
           state.play(false)
@@ -363,6 +371,8 @@ export function App() {
     onDragLeave={event => { if (hasFiles(event) && --dragDepth.current <= 0) { dragDepth.current = 0; setFileDrag(false) } }}
     onDrop={handleDrop}>
     <input className="sr-only" type="file" ref={files} multiple accept=".mp4,.webm,.mp3,.png" onChange={fileChange} tabIndex={-1} />
+    <ProjectFiles ref={projectFiles} blocked={exporting || recording || recordPending || importing}
+      onNewProject={newProject} notice={setNotice} onDirty={setProjectDirty} />
     <header className="topbar">
       <div className="brand" title="Resulam Video Editor - ReViE"><div className="brand-icon"><Film size={19} strokeWidth={2.2} /></div><strong>ReViE<span>Resulam Video Editor</span></strong></div>
       <div className="header-divider" />
@@ -372,8 +382,14 @@ export function App() {
           if (!titleChanged.current) { state.checkpoint(); titleChanged.current = true }
           state.titleTo(e.target.value)
         }} />
+        {projectDirty && <span className="project-dirty" role="status" aria-label="Unsaved changes" title="Unsaved changes" />}
         <ToolButton label="Project options" disabled={exporting || recording} aria-expanded={menu} onClick={() => setMenu(!menu)}><ChevronDown size={15} /></ToolButton>
-        {menu && <div className="project-menu"><button type="button" onClick={newProject}><Plus size={16} /> New project</button></div>}
+        {menu && <div className="project-menu">
+          <button type="button" onClick={() => { setMenu(false); projectFiles.current?.newProject() }}><Plus size={16} /> New project</button>
+          <button type="button" onClick={() => { setMenu(false); projectFiles.current?.open() }}><FolderOpen size={16} /> Open project</button>
+          <button type="button" onClick={() => { setMenu(false); projectFiles.current?.save() }}><Save size={16} /> Save project</button>
+          <button type="button" onClick={() => { setMenu(false); projectFiles.current?.save(true) }}><Save size={16} /> Save project as</button>
+        </div>}
       </div>
       <div className="history">
         <ToolButton label="Undo (Ctrl+Z)" disabled={!canUndo || exporting} onClick={() => useEditor.getState().undo()}><Undo2 size={17} /></ToolButton>

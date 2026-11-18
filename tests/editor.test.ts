@@ -3,6 +3,7 @@ import { beforeEach, test } from 'node:test'
 import { canvasSizeOf, durationOf, useEditor, type Asset } from '../src/store.ts'
 import { formatLyrics, karaokePresets, lyricLineAt, parseLyrics } from '../src/karaoke.ts'
 import { shortcutFor } from '../src/shortcuts.ts'
+import { decodeProject, encodeProject, projectSnapshot, sameProject } from '../src/projectFile.ts'
 
 const state = useEditor.getState
 const initial = state()
@@ -45,6 +46,52 @@ test('splitting and moving a karaoke clip preserves source-relative word timing'
 })
 
 beforeEach(() => useEditor.setState(initial, true))
+
+test('project save and reopen retain imported media, captions, tracking edits and markers', async () => {
+  const media = new Blob([new Uint8Array([1, 23, 169, 255])], { type: 'video/mp4' })
+  const url = URL.createObjectURL(media)
+  const asset: Asset = { id: 'local-recording', name: 'Recording.mp4', kind: 'video', duration: 3, url, file: media,
+    frameSize: { width: 640, height: 360 } }
+  state().addAssets([asset])
+  const video = state().add(asset, 3)!
+  state().change(video, { offset: .5, duration: 2 })
+  const caption = state().add('karaoke', 3)!
+  state().change(caption, { duration: 2, karaoke: {
+    main: parseLyrics('Salut tout le monde', { start: 0, end: 2 }), second: [], style: karaokePresets.custom,
+  } })
+  state().seek(4)
+  state().addMarker()
+  state().toggleTrack('overlay', 'muted')
+  state().titleTo('My tutorial')
+  const snapshot = projectSnapshot(state())
+  const file = await encodeProject(snapshot)
+  const restored = await decodeProject(file)
+  try {
+    assert.equal(restored.title, snapshot.title)
+    assert.deepEqual(restored.clips, JSON.parse(JSON.stringify(snapshot.clips)))
+    assert.deepEqual(restored.tracks, snapshot.tracks)
+    assert.deepEqual(restored.markers, snapshot.markers)
+    const local = restored.assets.find(item => item.id === asset.id)!
+    assert.notEqual(local.url, url)
+    assert.deepEqual(new Uint8Array(await local.file!.arrayBuffer()), new Uint8Array(await media.arrayBuffer()))
+    await assert.rejects(decodeProject(file.slice(0, -1)), /invalid or incomplete/)
+  } finally {
+    URL.revokeObjectURL(url)
+    for (const item of restored.assets) if (item.url) URL.revokeObjectURL(item.url)
+  }
+})
+
+test('playhead and selection preserve the saved revision while an edit marks it dirty', () => {
+  const snapshot = projectSnapshot(state())
+  state().seek(5)
+  state().selectRange({ anchor: 5, focus: 7 })
+  assert.equal(sameProject(snapshot, state()), true)
+  state().checkpoint()
+  state().titleTo('Changed')
+  assert.equal(sameProject(snapshot, state()), false)
+  state().undo()
+  assert.equal(sameProject(snapshot, state()), true)
+})
 
 test('range playback starts at the selection, resumes inside it, and stops at its end', () => {
   state().selectRange({ anchor: 6, focus: 9, track: 'main' })

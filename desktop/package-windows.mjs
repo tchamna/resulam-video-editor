@@ -20,7 +20,9 @@ await cp(join(runtime, 'electron.exe'), join(output, 'ReViE.exe'))
 
 const appFolder = join(output, 'resources', 'app')
 await mkdir(appFolder, { recursive: true })
-await cp(join(import.meta.dirname, 'main.cjs'), join(appFolder, 'main.cjs'))
+for (const file of ['main.cjs', 'preload.cjs', 'project-files.cjs']) {
+  await cp(join(import.meta.dirname, file), join(appFolder, file))
+}
 const build = join(import.meta.dirname, '..', 'dist')
 const bundledBuild = join(appFolder, 'dist')
 await mkdir(bundledBuild)

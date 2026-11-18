@@ -256,6 +256,8 @@ button.track-resizer::after{content:"";display:block;width:25px;height:2px;margi
 .shortcut-dialog dd{color:var(--mint);text-align:right}
 .shortcut-dialog p{margin:12px 0;color:var(--muted)}
 .shortcut-dialog form{text-align:right}
+.project-dirty{width:7px;height:7px;flex:none;border-radius:50%;background:#e5ad58}
+.project-prompt-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .marker-dialog label{display:grid;gap:6px;text-align:left;margin-bottom:14px}
 .marker-dialog input{width:100%;padding:7px;border:1px solid #3a4756;border-radius:4px}
 .toast{position:fixed;right:16px;bottom:43px;z-index:12;display:flex;align-items:center;gap:11px;max-width:calc(100vw - 32px);padding:7px 8px 7px 12px;background:#212b2a;color:#e2f4ed;border:1px solid #47695c;box-shadow:0 12px 28px #0007;border-radius:8px}

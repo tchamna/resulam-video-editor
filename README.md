@@ -46,5 +46,5 @@ MP4 export uses the browser’s native encoder and follows the canvas dimensions
 
 Choose **Export selection** below the timeline to export the selected time range with all visible layers. The header **Export MP4** button exports the full project.
 
-Media and edits stay in the open tab. Export the finished video before refreshing or closing the editor.
+Save editable projects with **Ctrl+S**. A `.revie` file includes your clips, media, captions, tracks, and markers. Open it with **Ctrl+O**. ReViE prompts for unsaved changes before replacing a project or closing the desktop app. The browser shows its own warning when a tab with unsaved changes is closed or refreshed.
 

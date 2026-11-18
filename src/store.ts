@@ -4,7 +4,7 @@ import type { Karaoke } from './karaoke'
 export type Kind = 'video' | 'audio' | 'image' | 'demo' | 'text' | 'arrow' | 'highlight' | 'blur' | 'karaoke'
 export type TrackId = 'annotations' | 'overlay' | 'main'
 export type FrameSize = { width: number; height: number }
-export type Asset = { id: string; name: string; kind: Kind; duration: number; url?: string; thumb?: string; frameSize?: FrameSize }
+export type Asset = { id: string; name: string; kind: Kind; duration: number; url?: string; file?: Blob; thumb?: string; frameSize?: FrameSize }
 export type Crop = { left: number; top: number; right: number; bottom: number }
 export type Clip = {
   id: string; assetId?: string; name: string; kind: Kind; track: TrackId
@@ -20,7 +20,7 @@ export type Clip = {
 }
 type Track = { id: TrackId; name: string; muted: boolean; locked: boolean; hidden?: boolean; magnetic?: boolean }
 type Marker = { id: string; time: number; name: string }
-type Project = { title: string; assets: Asset[]; clips: Clip[]; tracks: Track[]; markers: Marker[] }
+export type Project = { title: string; assets: Asset[]; clips: Clip[]; tracks: Track[]; markers: Marker[] }
 type TimeRange = { anchor: number; focus: number; track?: TrackId; clipId?: string }
 type Selection = { selectedClipId: string | null; selectedClipIds: string[]; range: TimeRange | null }
 type Snapshot = Project & Selection & { currentTime: number }

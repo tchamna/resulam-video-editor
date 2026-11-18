@@ -1,6 +1,7 @@
 const { app, BrowserWindow, desktopCapturer, dialog, Menu, net, protocol, session } = require('electron')
 const { join } = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { registerProjectFiles } = require('./project-files.cjs')
 
 const origin = 'revie://editor'
 const title = 'Resulam Video Editor - ReViE'
@@ -18,8 +19,9 @@ app.whenReady().then(() => {
   const editor = new BrowserWindow({
     title, width: 1440, height: 900, minWidth: 700, minHeight: 580, backgroundColor: '#101216',
     autoHideMenuBar: true,
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+    webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
+  registerProjectFiles(editor)
   editor.removeMenu()
   editor.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   editor.webContents.on('will-navigate', event => event.preventDefault())
