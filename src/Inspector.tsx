@@ -35,8 +35,11 @@ export function Inspector({ exporting }: { exporting: boolean }) {
     const panel = input?.closest('details')
     if (panel) panel.open = true
     input?.focus()
-    if (input instanceof HTMLTextAreaElement) input.select()
-  }, [editVersion])
+    if (input instanceof HTMLTextAreaElement) {
+      if (clip?.kind === 'karaoke') input.setSelectionRange(input.value.length, input.value.length)
+      else input.select()
+    }
+  }, [editVersion, clip?.kind])
   const edit = (patch: Partial<Clip>) => { if (clip) useEditor.getState().change(clip.id, patch) }
   const number = (key: 'x' | 'y' | 'scale' | 'rotation' | 'speed' | 'fontSize' | 'fadeIn' | 'fadeOut', label: string, unit: string, min: number, max: number, step = 1) => (
     <Field label={label} value={clip![key]} unit={unit} min={min} max={max} step={step} change={value => {

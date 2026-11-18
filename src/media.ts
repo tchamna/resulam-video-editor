@@ -1,4 +1,4 @@
-import { type Asset, type Clip, type FrameSize, type TrackId, canvasSizeOf, clamp, DEFAULT_FRAME, durationOf, EMPTY_CROP, timed, useEditor } from './store'
+import { type Asset, type Clip, type FrameSize, canvasSizeOf, clamp, clipsOnTrack, DEFAULT_FRAME, durationOf, EMPTY_CROP, timed, useEditor } from './store'
 import { drawKaraoke, loadKaraokeFont } from './karaokeCanvas'
 
 const { width: WIDTH, height: HEIGHT } = DEFAULT_FRAME
@@ -87,11 +87,10 @@ export const opacityAt = (clip: Clip, time: number) => clip.opacity / 100 * fade
 
 export function visibleClips(time: number) {
   const { clips, tracks } = useEditor.getState()
-  const order: TrackId[] = ['main', 'overlay', 'annotations']
   const end = durationOf(clips)
-  const active = (clip: Clip) => time >= clip.start &&
-    (time < clip.start + clip.duration || (time === end && time === clip.start + clip.duration))
-  return order.flatMap(track => tracks.find(t => t.id === track)?.hidden ? [] : clips.filter(c => c.track === track && active(c)))
+  const active = clips.filter(clip => time >= clip.start &&
+    (time < clip.start + clip.duration || (time === end && time === clip.start + clip.duration)))
+  return [...tracks].reverse().flatMap(track => track.hidden ? [] : clipsOnTrack(active, track.id))
 }
 
 export function frameOf(clip: Clip, time: number, { width, height }: FrameSize) {
@@ -251,11 +250,21 @@ function fitImage(ctx: Context, source: CanvasImageSource, sw: number, sh: numbe
 
 let blurBuffer: HTMLCanvasElement | undefined
 export function renderFrame(ctx: Context, time: number, playing: boolean, exporting = false) {
-  const { assets, tracks } = useEditor.getState()
+  const { assets, clips, tracks } = useEditor.getState()
   const { width, height } = ctx.canvas
   const active = visibleClips(time)
   const activeIds = new Set(active.map(c => c.id))
   for (const [id, { el }] of layers) if (!activeIds.has(id) && !el.paused) el.pause()
+  if (playing || exporting) {
+    for (const clip of clips) {
+      if ((clip.kind !== 'video' && clip.kind !== 'audio') || clip.start <= time || clip.start > time + .5 ||
+          tracks.some(track => track.id === clip.track && track.hidden)) continue
+      const asset = assets.find(item => item.id === clip.assetId)
+      if (!asset?.url) continue
+      const { el } = mediaFor(clip, asset)
+      if (el.readyState > 0 && !el.seeking && Math.abs(el.currentTime - clip.offset) > .008) el.currentTime = clip.offset
+    }
+  }
   ctx.fillStyle = '#111519'
   ctx.fillRect(0, 0, width, height)
   for (const clip of active) {
@@ -483,17 +492,29 @@ export async function exportMP4(onProgress: (ratio: number) => void, signal: Abo
   canvas.height = height
   const ctx = canvas.getContext('2d', { alpha: false })!
   const frameInterval = 1000 / 60
-  const videoStream = canvas.captureStream(60)
+  const videoStream = canvas.captureStream(0)
   const videoTrack = videoStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack
-  const stream = new MediaStream([videoTrack, ...(capture?.stream.getAudioTracks() ?? [])])
+  const hasAudio = state.clips.some(clip => (clip.kind === 'video' || clip.kind === 'audio') &&
+    clip.start < start + duration && clip.start + clip.duration > start && clip.volume > 0 &&
+    state.assets.some(asset => asset.id === clip.assetId && asset.url) &&
+    !state.tracks.some(track => track.id === clip.track && (track.hidden || track.muted)))
+  const stream = new MediaStream([videoTrack, ...(hasAudio ? capture!.stream.getAudioTracks() : [])])
   const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 })
   const chunks: Blob[] = []
   let timer = 0
   let preRoll = 0
   let abort: (() => void) | undefined
+  let silence: ConstantSourceNode | undefined
   const originalVolume = speakers!.gain.value
   speakers!.gain.value = 0
   try {
+    if (hasAudio) {
+      // Keep the muxer supplied with audio samples through gaps between clips.
+      silence = audio!.createConstantSource()
+      silence.offset.value = 0
+      silence.connect(capture!)
+      silence.start()
+    }
     return await new Promise<Blob>((resolve, reject) => {
       const stopWithError = (error: unknown) => {
         reject(error)
@@ -550,6 +571,8 @@ export async function exportMP4(onProgress: (ratio: number) => void, signal: Abo
   } finally {
     clearTimeout(timer)
     if (abort) signal.removeEventListener('abort', abort)
+    silence?.stop()
+    silence?.disconnect()
     videoStream.getTracks().forEach(track => track.stop())
     speakers!.gain.value = originalVolume
     stopMedia()

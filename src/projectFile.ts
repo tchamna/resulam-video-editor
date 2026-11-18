@@ -1,9 +1,10 @@
-import type { Asset, Clip, Project } from './store'
+import { audioTrack, type Asset, type Clip, type Project } from './store.ts'
 
 const signature = new TextEncoder().encode('REVIE001')
 const headerLength = signature.length + 4
 const maxManifest = 32 * 1024 * 1024
-const trackIds = ['annotations', 'overlay', 'main']
+const requiredTracks = ['annotations', 'overlay', 'main']
+const trackIds = [...requiredTracks, audioTrack.id]
 const clipKinds = ['video', 'audio', 'image', 'demo', 'text', 'arrow', 'highlight', 'blur', 'karaoke']
 const mediaTypes = ['video/mp4', 'video/webm', 'audio/mpeg', 'image/png']
 
@@ -80,8 +81,9 @@ export async function decodeProject(file: Blob): Promise<Project> {
   if (!project || typeof project.title !== 'string' || !Array.isArray(project.assets) ||
       !Array.isArray(project.clips) || !project.clips.every(validClip) || !Array.isArray(project.markers) ||
       !project.markers.every(marker => typeof marker?.id === 'string' && typeof marker.name === 'string' && finite(marker.time)) ||
-      !Array.isArray(project.tracks) || project.tracks.length !== trackIds.length ||
-      !trackIds.every(id => project.tracks.some(track => track?.id === id && typeof track.name === 'string'))) invalidFile()
+      !Array.isArray(project.tracks) || !project.tracks.every(track => trackIds.includes(track?.id) && typeof track.name === 'string') ||
+      new Set(project.tracks.map(track => track.id)).size !== project.tracks.length ||
+      !requiredTracks.every(id => project.tracks.some(track => track.id === id))) invalidFile()
   let size = position
   const assetIds = new Set<string>()
   for (const asset of project.assets) {
@@ -101,5 +103,6 @@ export async function decodeProject(file: Blob): Promise<Project> {
     return { id, name, kind, duration, frameSize, url, file: media, thumb: url && kind === 'image' ? url :
       typeof thumb === 'string' && thumb.startsWith('data:image/') ? thumb : undefined }
   })
-  return { title: project.title, clips: project.clips, tracks: project.tracks, markers: project.markers, assets }
+  const tracks = project.tracks.some(track => track.id === 'audio') ? project.tracks : [...project.tracks, audioTrack]
+  return { title: project.title, clips: project.clips, tracks, markers: project.markers, assets }
 }

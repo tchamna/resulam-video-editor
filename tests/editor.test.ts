@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { beforeEach, test } from 'node:test'
-import { canvasSizeOf, durationOf, useEditor, type Asset } from '../src/store.ts'
-import { formatLyrics, karaokePresets, lyricLineAt, parseLyrics } from '../src/karaoke.ts'
+import { canvasSizeOf, clipsOnTrack, durationOf, useEditor, type Asset } from '../src/store.ts'
+import { createLyricCue, exportSrt, formatLyrics, karaokePresets, lyricLineAt, parseLyrics } from '../src/karaoke.ts'
 import { shortcutFor } from '../src/shortcuts.ts'
 import { decodeProject, encodeProject, projectSnapshot, sameProject } from '../src/projectFile.ts'
 
@@ -32,17 +32,68 @@ test('Karaoke Studio timing TSV retains exact timings and rejects invalid words'
   assert.throws(() => parseLyrics('Lyrics', { start: 3, end: 2 }), /after/)
 })
 
-test('splitting and moving a karaoke clip preserves source-relative word timing', () => {
+test('empty SRT cues stay silent and exported bilingual SRT follows clip timing', () => {
+  const main = parseLyrics('1\r\n00:00:00,000 --> 00:00:01,000\r\n \r\n\r\n2\r\n00:00:01,000 --> 00:00:05,000\r\nNùfī', { start: 0, end: 6 })
+  assert.equal(main.length, 1)
+  assert.equal(lyricLineAt(main, .5), undefined)
+  const second = [createLyricCue('Bonjour à tous', { start: 2, end: 3 })]
+  const clip = { start: 12, duration: 1, offset: 1.5, speed: 2, karaoke: { main, second, style: karaokePresets.normal } }
+  assert.equal(exportSrt([clip], 'main'), '1\r\n00:00:12,000 --> 00:00:13,000\r\nNùfī\r\n\r\n')
+  assert.equal(exportSrt([clip], 'second'), '1\r\n00:00:12,250 --> 00:00:12,750\r\nBonjour à tous\r\n\r\n')
+  assert.equal(exportSrt([{ ...clip, offset: 6 }], 'main'), '')
+})
+
+test('splitting assigns later bilingual cues to the right chunk without shifting their timeline timing', () => {
   const id = state().add('karaoke', 3)!
-  const lyrics = parseLyrics('One two', { start: 0, end: 4 })
-  state().change(id, { karaoke: { main: lyrics, second: [], style: karaokePresets.custom } })
+  const lyrics = [createLyricCue('One two', { start: 0, end: 2 }), createLyricCue('Three four', { start: 2, end: 4 })]
+  const second = [createLyricCue('Bonjour', { start: 1, end: 4 })]
+  state().change(id, { karaoke: { main: lyrics, second, style: karaokePresets.custom } })
   state().seek(5)
   state().split()
   const right = state().clips.find(clip => clip.id === state().selectedClipId)!
   assert.equal(right.offset, 2)
-  assert.equal(right.karaoke?.main, lyrics)
+  const left = state().clips.find(clip => clip.id === id)!
+  assert.deepEqual(left.karaoke?.main, lyrics.slice(0, 1))
+  assert.deepEqual(right.karaoke?.main, lyrics.slice(1))
+  assert.equal(left.karaoke?.second[0].end, 2)
+  assert.equal(right.karaoke?.second[0].start, 2)
   state().change(right.id, { start: 8 })
   assert.equal(state().clips.find(clip => clip.id === right.id)?.offset, 2)
+})
+
+test('resizing a caption chunk updates its automatic end and preserves explicit timings and undo', () => {
+  const id = state().add('karaoke', 3)!
+  const main = parseLyrics('One two', { start: 0, end: 4 }, [], true)
+  const second = [createLyricCue('Bonjour', { start: 0, end: 3 })]
+  state().change(id, { karaoke: { main, second, style: karaokePresets.normal } })
+  const chunk = () => state().clips.find(clip => clip.id === id)!
+  state().change(id, { duration: 6 })
+  assert.equal(chunk().karaoke?.main[0].end, 6)
+  assert.equal(chunk().karaoke?.main[0].words.at(-1)?.end, 6)
+  assert.deepEqual(chunk().karaoke?.second, second)
+  state().change(id, { duration: 2 })
+  assert.equal(chunk().karaoke?.main[0].end, 2)
+  state().undo()
+  assert.equal(chunk().karaoke?.main[0].end, 6)
+})
+
+test('adding at a caption boundary selects the next chunk and inserting over a range keeps adjacent lyrics in place', () => {
+  const id = state().add('karaoke', 1)!
+  state().change(id, { karaoke: { main: [createLyricCue('Original lyrics', { start: 0, end: 4 })], second: [], style: karaokePresets.normal } })
+  state().seek(3)
+  state().split()
+  const right = state().selectedClipId
+  state().addCaption()
+  assert.equal(state().selectedClipId, right)
+  let chunks = state().clips.filter(clip => clip.kind === 'karaoke')
+  assert.deepEqual(chunks.map(clip => [clip.start, clip.duration, clip.offset]), [[1, 2, 0], [3, 2, 2]])
+  state().selectRange({ anchor: 2, focus: 4 })
+  state().addCaption()
+  chunks = state().clips.filter(clip => clip.kind === 'karaoke').sort((a, b) => a.start - b.start)
+  assert.deepEqual(chunks.map(clip => [clip.start, clip.duration, clip.offset]), [[1, 1, 0], [2, 2, 0], [4, 1, 3]])
+  assert.equal(state().selectedClipId, chunks[1].id)
+  assert.equal(chunks[1].karaoke, undefined)
+  assert.equal(new Set(chunks.map(clip => clip.id)).size, 3)
 })
 
 beforeEach(() => useEditor.setState(initial, true))
@@ -180,6 +231,13 @@ test('shifted punctuation and modifier shortcuts resolve to distinct actions', (
   assert.equal(press('*', 'Digit8', { ctrlKey: true, shiftKey: true }), 'zoomRange')
   assert.equal(press('}', 'BracketRight', { ctrlKey: true, shiftKey: true }), 'extendMarkerForward')
   assert.equal(press('Delete', 'Delete', { ctrlKey: true }), 'ripple')
+  assert.equal(press('M', 'Semicolon', { shiftKey: true }), 'addMarker')
+  assert.equal(press('m', 'Semicolon', { ctrlKey: true }), 'markers')
+  assert.equal(press('M', 'Semicolon', { ctrlKey: true, shiftKey: true }), undefined)
+  assert.equal(press(';', 'Comma'), undefined)
+  assert.equal(press('.', 'Comma', { shiftKey: true }), 'frameForward')
+  assert.equal(press(',', 'KeyM'), 'frameBack')
+  assert.equal(press(':', 'Semicolon', { ctrlKey: true, shiftKey: true }), 'snap')
 })
 
 test('cutting a range preserves both fragments and their source offsets', () => {
@@ -298,16 +356,31 @@ test('double-click edit navigation makes an offscreen annotation active', () => 
   assert.equal(state().annotationEditVersion, version)
 })
 
-test('the first main video controls canvas dimensions, including after undo', () => {
+test('the earliest main video controls canvas dimensions regardless of insertion order', () => {
   const portrait: Asset = { id: 'portrait', name: 'Portrait', kind: 'video', duration: 2, frameSize: { width: 360, height: 640 } }
   const landscape: Asset = { id: 'landscape', name: 'Landscape', kind: 'video', duration: 2, frameSize: { width: 640, height: 360 } }
   state().addAssets([portrait, landscape])
   state().add(landscape, 0, 'overlay')
   assert.deepEqual(canvasSizeOf(state()), { width: 1280, height: 720 })
-  state().add(portrait, 0, 'main')
-  state().add(landscape, 2, 'main')
+  const later = state().add(landscape, 2, 'main')
+  const earlier = state().add(portrait, 0, 'main')
   assert.deepEqual(canvasSizeOf(state()), portrait.frameSize)
+  assert.deepEqual(clipsOnTrack(state().clips, 'main').slice(-2).map(clip => clip.id), [earlier, later])
   state().undo()
   state().undo()
   assert.deepEqual(canvasSizeOf(state()), { width: 1280, height: 720 })
+})
+
+test('new standalone audio goes to Audio and older projects gain the track when reopened', async () => {
+  const music: Asset = { id: 'music', name: 'Music', kind: 'audio', duration: 4 }
+  state().addAssets([music])
+  const id = state().add(music, 1)
+  assert.equal(state().clips.find(clip => clip.id === id)?.track, 'audio')
+  const saved = projectSnapshot(state())
+  assert.deepEqual((await decodeProject(await encodeProject(saved))).tracks, saved.tracks)
+  const legacy = { ...saved, tracks: saved.tracks.filter(track => track.id !== 'audio'),
+    clips: saved.clips.map(clip => clip.id === id ? { ...clip, track: 'main' as const } : clip) }
+  const reopened = await decodeProject(await encodeProject(legacy))
+  assert.equal(reopened.tracks.at(-1)?.id, 'audio')
+  assert.equal(reopened.clips.find(clip => clip.id === id)?.track, 'main')
 })

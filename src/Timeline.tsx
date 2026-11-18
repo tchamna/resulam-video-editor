@@ -1,10 +1,10 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent, type Ref } from 'react'
-import { Clapperboard, ClipboardPaste, Copy, Download, Eye, EyeOff, Keyboard, Layers2, Lock, Magnet, Maximize2, Minus, Monitor, Plus, ScanLine, Scissors, Split, Trash2, Type, Unlock, Volume2, VolumeX, X } from 'lucide-react'
-import { affectedClips, clamp, type Clip, durationOf, FRAME, isAnnotation, type Kind, MIN_CLIP, rangeBounds, splitTargets, timecode, timed, type TrackId, useEditor } from './store'
+import { AudioLines, Clapperboard, ClipboardPaste, Copy, Download, Eye, EyeOff, Keyboard, Layers2, Lock, Magnet, Maximize2, Minus, Monitor, Plus, ScanLine, Scissors, Split, Trash2, Type, Unlock, Volume2, VolumeX, X } from 'lucide-react'
+import { affectedClips, clamp, type Clip, clipsOnTrack, durationOf, FRAME, isAnnotation, type Kind, MIN_CLIP, nextCaptionStart, rangeBounds, splitTargets, timecode, timed, type TrackId, useEditor } from './store'
 import { icons, pointerGesture, ToolButton } from './ui'
 import { shortcuts } from './shortcuts'
 
-const trackIcons = { annotations: Type, overlay: Layers2, main: Monitor }
+const trackIcons = { annotations: Type, overlay: Layers2, main: Monitor, audio: AudioLines }
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 256
 const MIN_TRACK_HEIGHT = 34
@@ -12,7 +12,8 @@ const MAX_TRACK_HEIGHT = 160
 const zoomSlider = (scale: number) => Math.log2(scale)
 const types = ['text', 'arrow', 'highlight', 'blur', 'karaoke']
 export const ITEM_TYPE = 'application/x-revie-item'
-const validTrack = (kind: Kind, track: TrackId) => isAnnotation(kind) ? track === 'annotations' : track !== 'annotations'
+const validTrack = (kind: Kind, track: TrackId) => isAnnotation(kind) ? track === 'annotations' :
+  kind === 'audio' ? track === 'audio' : track === 'main' || track === 'overlay'
 export type TimelineControls = {
   zoom: (action: 'in' | 'out' | 'project' | 'range' | 'max') => void
   resizeTracks: (delta: number) => void
@@ -229,7 +230,13 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
       clientX = next.clientX
       if (moved || Math.abs(clientX - pressX) >= 3) updateRange()
       else if (onTap) onTap()
-      else if (!fixedEdge) { state.select(null); state.seek(rawStart) }
+      else if (!fixedEdge) {
+        const current = useEditor.getState()
+        const editingCaptions = !current.range && current.selectedClipIds.length === 1 &&
+          current.clips.some(clip => clip.id === current.selectedClipId && clip.kind === 'karaoke')
+        if (!editingCaptions) state.select(null)
+        state.seek(rawStart)
+      }
     })
   }
   function adjustRange(event: ReactPointerEvent<HTMLButtonElement>, edge: 'start' | 'end') {
@@ -298,13 +305,14 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
       const points = [0, state.currentTime, ...other.filter(c => c.track === track).flatMap(c => [c.start, c.start + c.duration])]
       const snap = (value: number) => snapping && !next.ctrlKey && !next.metaKey ? snapTime(value, points, pps) : value
       if (edge === 'left') {
-        const earliest = media && timed(clip.kind) ? clip.start - clip.offset / clip.speed : 0
+        const earliest = clip.kind === 'karaoke' || media && timed(clip.kind) ? clip.start - clip.offset / clip.speed : 0
         const start = clamp(snap(clip.start + delta), Math.max(0, earliest), end - MIN_CLIP)
         const fadeWindow = clip.fadeWindow && { ...clip.fadeWindow, offset: clip.fadeWindow.offset + start - clip.start }
         const magnetic = tracks.find(item => item.id === track)?.magnetic
         state.change(clip.id, { start: magnetic ? clip.start : start, duration: end - start, offset: Math.max(0, clip.offset + (start - clip.start) * clip.speed), fadeWindow }, false)
       } else if (edge === 'right') {
-        const max = media && timed(clip.kind) ? Math.max(MIN_CLIP, (media.duration - clip.offset) / clip.speed) : Infinity
+        const max = clip.kind === 'karaoke' ? Math.max(clip.duration, nextCaptionStart(other, clip) - clip.start) :
+          media && timed(clip.kind) ? Math.max(MIN_CLIP, (media.duration - clip.offset) / clip.speed) : Infinity
         state.change(clip.id, { duration: clamp(snap(end + delta) - clip.start, MIN_CLIP, max) }, false)
       } else {
         const proposed = clip.start + delta
@@ -414,7 +422,7 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
         </div>
         {tracks.map((track, index) => {
           const Icon = trackIcons[track.id]
-          const trackClips = clips.filter(clip => clip.track === track.id)
+            const trackClips = clipsOnTrack(clips, track.id)
           const trackSelected = trackClips.length > 0 && trackClips.length === selected.length && trackClips.every(clip => selected.includes(clip.id))
           return <div className="track-row" key={track.id}>
             <div className={`track-header ${trackSelected ? 'track-selected' : ''}`}>
@@ -449,13 +457,15 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
                 return <div key={clip.id} className={`timeline-clip ${track.id} ${selected.includes(clip.id) ? 'selected' : ''} ${track.locked ? 'locked' : ''}`}
                   style={{ left: clip.start * pps, width: Math.max(3, clip.duration * pps) }}
                   tabIndex={disabled ? -1 : 0} role="button" aria-pressed={selected.includes(clip.id)} aria-label={`${clip.name}, ${clip.duration.toFixed(2)} seconds`}
-                  title={isAnnotation(clip.kind) ? 'Double-click to edit this annotation' : 'Drag across the clip to select time. Drag the bottom grip to move it.'}
+                  title={clip.kind === 'karaoke' ? 'Double-click to jump to the start and edit lyrics' : isAnnotation(clip.kind) ? 'Double-click to edit this annotation' : 'Drag across the clip to select time. Drag the bottom grip to move it.'}
                   onKeyDown={event => { if (event.key === 'Enter') {
                     const state = useEditor.getState()
-                    if (isAnnotation(clip.kind)) state.editAnnotation(clip.id)
+                    if (isAnnotation(clip.kind)) state.editAnnotation(clip.id, clip.kind === 'karaoke' ? clip.start : undefined)
                     else state.select(clip.id)
                   } }}
-                  onDoubleClick={() => { if (!disabled && isAnnotation(clip.kind)) useEditor.getState().editAnnotation(clip.id) }}
+                  onDoubleClick={() => {
+                    if (!disabled && isAnnotation(clip.kind)) useEditor.getState().editAnnotation(clip.id, clip.kind === 'karaoke' ? clip.start : undefined)
+                  }}
                   onPointerDown={event => clipGesture(event, clip)}>
                   {!track.locked && <div className="trim-handle left" aria-label="Trim clip start" onPointerDown={e => clipGesture(e, clip, 'left')} />}
                   <div className="clip-details"><Icon size={13} /><span>{clip.name}</span></div>

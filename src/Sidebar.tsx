@@ -1,6 +1,8 @@
 import { useMemo, useState, type DragEvent } from 'react'
-import { Aperture, ArrowUpRight, Blend, Captions, Circle, Focus, FolderOpen, Plus, RectangleHorizontal, Sparkles, Type } from 'lucide-react'
+import { Aperture, ArrowUpRight, Blend, Captions, Circle, Download, Focus, FolderOpen, Plus, RectangleHorizontal, Sparkles, Type } from 'lucide-react'
 import { type Asset, type Kind, isAnnotation, names, timecode, useEditor } from './store'
+import { exportSrt, type CaptionLanguage } from './karaoke'
+import { saveCaptionFile } from './saveFile'
 import { thumbnail, thumbnailTime } from './media'
 import { ITEM_TYPE } from './Timeline'
 import { icons, ToolButton } from './ui'
@@ -21,10 +23,14 @@ export function Sidebar({ importMedia, disabled, tab, setTab }: {
   importMedia: () => void; disabled: boolean; tab: SidebarTab; setTab: (tab: SidebarTab) => void
 }) {
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const [savingCaptions, setSavingCaptions] = useState(false)
+  const [captionStatus, setCaptionStatus] = useState('')
   const assets = useEditor(s => s.assets)
   const clip = useEditor(s => s.clips.find(c => c.id === s.selectedClipId))
   const locked = useEditor(s => s.tracks.find(t => t.id === clip?.track)?.locked)
   const captionsLocked = useEditor(s => s.tracks.find(t => t.id === 'annotations')?.locked)
+  const visibleCaptions = useEditor(s => s.clips)
+  const tracks = useEditor(s => s.tracks)
   const thumbnails = useMemo(() => ({ 'demo-screen': thumbnail('demo'), 'demo-overlay': thumbnail('image') }), [])
   function add(item: Asset | Kind) {
     const state = useEditor.getState()
@@ -43,6 +49,20 @@ export function Sidebar({ importMedia, disabled, tab, setTab }: {
     else state.change(clip.id, clip.track === 'main' ? { shape: effect, track: 'overlay', x: 81, y: 74, w: 28, h: 30 } : { shape: effect })
   }
   const noVisual = !clip || clip.kind === 'audio' || isAnnotation(clip.kind)
+  const captionFiles = useMemo(() => {
+    const clips = visibleCaptions.filter(item => item.karaoke && !tracks.some(track => track.id === item.track && track.hidden))
+    return { main: exportSrt(clips, 'main'), second: exportSrt(clips, 'second') }
+  }, [visibleCaptions, tracks])
+  async function exportCaptions(language: CaptionLanguage) {
+    const title = useEditor.getState().title.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').slice(0, 150).replace(/[. ]+$/, '') || 'Tutorial'
+    setSavingCaptions(true)
+    setCaptionStatus('')
+    try {
+      if (await saveCaptionFile(captionFiles[language], `${title}-${language}.srt`)) setCaptionStatus('SRT exported.')
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') setCaptionStatus((error as Error).message)
+    } finally { setSavingCaptions(false) }
+  }
   return <aside className="sidebar" aria-label="Editor assets">
     <div className="sidebar-tabs" role="tablist" aria-label="Asset libraries">
       {tabs.map(([label, Icon]) => <button key={label} type="button" role="tab" aria-selected={tab === label} aria-controls="asset-panel" className={tab === label ? 'active' : ''} onClick={() => setTab(label)}><Icon size={15} /><span>{label}</span></button>)}
@@ -115,11 +135,18 @@ export function Sidebar({ importMedia, disabled, tab, setTab }: {
         </div>
       </>}
       {tab === 'Captions' && <>
-        <div className="library-heading"><div><h2>Karaoke captions</h2><span>Add an editable caption clip at the playhead</span></div></div>
+        <div className="library-heading"><div><h2>Karaoke captions</h2><span>Add at the playhead or over a marked range</span></div></div>
         <button type="button" className="library-item" draggable={!disabled && !captionsLocked} disabled={disabled || captionsLocked}
-          onDragStart={event => beginDrag(event, 'karaoke')} onClick={() => add('karaoke')}>
+          onDragStart={event => beginDrag(event, 'karaoke')} onClick={() => useEditor.getState().addCaption()}>
           <div className="track-glyph annotations"><Captions size={17} /></div><div><strong>Add karaoke captions</strong></div><Plus size={14} />
         </button>
+        <div className="caption-exports">
+          <h2>Export subtitles</h2>
+          {([['main', 'Export main SRT'], ['second', 'Export second-language SRT']] as const).map(([language, label]) =>
+            <button key={language} type="button" className="library-item" disabled={disabled || savingCaptions || !captionFiles[language]}
+              onClick={() => void exportCaptions(language)}><Download size={15} /><strong>{label}</strong></button>)}
+          {captionStatus && <p role="status">{captionStatus}</p>}
+        </div>
       </>}
     </div>
   </aside>

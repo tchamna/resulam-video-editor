@@ -38,6 +38,8 @@ For karaoke captions, open the **Captions** tab and add a clip at the playhead. 
 - Select a time range and click **Silence** to mute audio for that interval on the selected clip or unlocked tracks. Use **Clear silenced ranges** in Properties to restore a clip's audio.
 - Press **Space** to play or pause. If a time range is highlighted, playback stays within it and stops at its end. Use **,** or **.** to step by a frame, **S** to split selected media, or **Ctrl+Shift+S** to split all unlocked tracks at the playhead.
 
+To write captions inside ReViE, add a clip under **Captions**, then type in **Write captions** in Properties. Text and valid timing edits appear in the preview as you enter them. Use **S** to split a selected caption at the playhead. Mark a timeline range and choose **Add karaoke captions** to write a fresh chunk in that range while keeping captions on either side in place. Double-click a chunk on the timeline or its text in the preview to edit the cue at that position. The **Captions** sidebar exports one SRT per language using the visible clips' positions and trims on the project timeline.
+
 ## Recording and export
 
 Open the app in a supported desktop browser on localhost or HTTPS for screen sharing. The browser prompts you to choose a screen, window, or tab. Capture audio when the browser offers it for the chosen source.

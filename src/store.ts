@@ -1,8 +1,8 @@
 import { create } from 'zustand'
-import type { Karaoke } from './karaoke'
+import { fitLyricEnds, splitLyrics, type CaptionLanguage, type Karaoke } from './karaoke.ts'
 
 export type Kind = 'video' | 'audio' | 'image' | 'demo' | 'text' | 'arrow' | 'highlight' | 'blur' | 'karaoke'
-export type TrackId = 'annotations' | 'overlay' | 'main'
+export type TrackId = 'annotations' | 'overlay' | 'main' | 'audio'
 export type FrameSize = { width: number; height: number }
 export type Asset = { id: string; name: string; kind: Kind; duration: number; url?: string; file?: Blob; thumb?: string; frameSize?: FrameSize }
 export type Crop = { left: number; top: number; right: number; bottom: number }
@@ -15,10 +15,12 @@ export type Clip = {
   fadeWindow?: { offset: number; duration: number }
   crop?: Crop
   karaoke?: Karaoke
+  fixedCaptionLength?: boolean
   silentRanges?: { start: number; end: number }[]
   endTransform?: { x: number; y: number; scale: number }; shape: 'none' | 'circle' | 'rounded'
 }
 type Track = { id: TrackId; name: string; muted: boolean; locked: boolean; hidden?: boolean; magnetic?: boolean }
+export const audioTrack: Track = { id: 'audio', name: 'Audio', muted: false, locked: false }
 type Marker = { id: string; time: number; name: string }
 export type Project = { title: string; assets: Asset[]; clips: Clip[]; tracks: Track[]; markers: Marker[] }
 type TimeRange = { anchor: number; focus: number; track?: TrackId; clipId?: string }
@@ -29,7 +31,8 @@ type Editor = Project & {
   currentTime: number; selectedClipId: string | null; zoomLevel: number; playing: boolean; snapping: boolean
   playbackStart: number; markersVisible: boolean
   selectedClipIds: string[]; range: TimeRange | null; clipboard: Clipboard | null; rangeMode: boolean
-  annotationEditVersion: number; editAnnotation: (id: string) => void
+  annotationEditVersion: number; annotationEditLanguage?: CaptionLanguage
+  editAnnotation: (id: string, at?: number, language?: CaptionLanguage) => void
   past: Snapshot[]; future: Snapshot[]
   checkpoint: () => void; undo: () => void; redo: () => void
   titleTo: (title: string) => void; addAssets: (assets: Asset[]) => void
@@ -39,6 +42,7 @@ type Editor = Project & {
   copy: (cut?: boolean) => boolean; paste: () => boolean; duplicate: () => boolean
   zoom: (zoomLevel: number) => void; snap: () => void; toggleTrack: (id: TrackId, key: 'muted' | 'locked' | 'hidden' | 'magnetic') => void
   add: (item: Asset | Kind, start?: number, track?: TrackId) => string | undefined
+  addCaption: () => void
   change: (id: string, patch: Partial<Clip>, history?: boolean) => void
   settleClip: (id: string, destination?: TrackId) => void
   split: (allTracks?: boolean) => void; remove: (ripple?: boolean) => void; silence: () => boolean
@@ -55,8 +59,8 @@ export const EMPTY_CROP: Crop = { left: 0, top: 0, right: 0, bottom: 0 }
 export const durationOf = (clips: Clip[]) => clips.reduce((end, clip) => Math.max(end, clip.start + clip.duration), 0)
 export const DEFAULT_FRAME: FrameSize = { width: 1280, height: 720 }
 export function canvasSizeOf({ clips, assets }: Pick<Project, 'clips' | 'assets'>): FrameSize {
-  for (const clip of clips) {
-    if (clip.track !== 'main' || clip.kind !== 'video') continue
+  for (const clip of clipsOnTrack(clips, 'main')) {
+    if (clip.kind !== 'video') continue
     const size = assets.find(asset => asset.id === clip.assetId)?.frameSize
     if (size) return size
   }
@@ -67,7 +71,7 @@ export const names: Partial<Record<Kind, string>> = { text: 'Text Box', arrow: '
 export function makeClip(item: Asset | Kind, start: number, track?: TrackId): Clip {
   const asset = typeof item === 'string' ? undefined : item
   const kind = typeof item === 'string' ? item : item.kind
-  const lane = track ?? (isAnnotation(kind) ? 'annotations' : kind === 'image' ? 'overlay' : 'main')
+  const lane = track ?? (isAnnotation(kind) ? 'annotations' : kind === 'image' ? 'overlay' : kind === 'audio' ? 'audio' : 'main')
   const pip = lane === 'overlay' && !isAnnotation(kind)
   const text = kind === 'text'
   return {
@@ -95,6 +99,9 @@ const keyframeAt = (clip: Clip, ratio: number) => clip.endTransform && ({
   scale: clip.scale + (clip.endTransform.scale - clip.scale) * ratio,
 })
 const clipEnd = (clip: Clip) => clip.start + clip.duration
+export const nextCaptionStart = (clips: Clip[], clip: Clip) => clips.reduce((next, item) =>
+  item.id !== clip.id && item.kind === 'karaoke' && item.track === clip.track && item.start > clip.start
+    ? Math.min(next, item.start) : next, Infinity)
 export const rangeBounds = (range: TimeRange) => ({ start: Math.min(range.anchor, range.focus), end: Math.max(range.anchor, range.focus) })
 export function playbackBounds({ range, clips }: Pick<Editor, 'range' | 'clips'>) {
   const duration = durationOf(clips)
@@ -108,7 +115,7 @@ export function playbackBounds({ range, clips }: Pick<Editor, 'range' | 'clips'>
 }
 const unlocked = (state: Editor, track: TrackId) => !state.tracks.find(item => item.id === track)?.locked
 const magnetic = (state: Editor, id: TrackId) => state.tracks.some(track => track.id === id && track.magnetic && !track.locked)
-const inTrackOrder = (clips: Clip[], track: TrackId) => clips.filter(clip => clip.track === track).sort((a, b) => a.start - b.start)
+export const clipsOnTrack = (clips: Clip[], track: TrackId) => clips.filter(clip => clip.track === track).sort((a, b) => a.start - b.start)
 
 function packTrack(clips: Clip[], ordered: Clip[]) {
   const byId = new Map<string, Clip>()
@@ -122,7 +129,7 @@ function packTrack(clips: Clip[], ordered: Clip[]) {
 
 function insertMagnetically(clips: Clip[], additions: Clip[], track: TrackId, time: number) {
   const ids = new Set(additions.map(clip => clip.id))
-  const ordered = inTrackOrder(clips, track).filter(clip => !ids.has(clip.id))
+  const ordered = clipsOnTrack(clips, track).filter(clip => !ids.has(clip.id))
   const index = ordered.findIndex(clip => time < clip.start + clip.duration / 2)
   ordered.splice(index < 0 ? ordered.length : index, 0, ...additions)
   return packTrack(clips, ordered)
@@ -130,7 +137,7 @@ function insertMagnetically(clips: Clip[], additions: Clip[], track: TrackId, ti
 
 function compactMagneticTracks(state: Editor, clips: Clip[]) {
   for (const track of state.tracks) {
-    if (magnetic(state, track.id)) clips = packTrack(clips, inTrackOrder(clips, track.id))
+    if (magnetic(state, track.id)) clips = packTrack(clips, clipsOnTrack(clips, track.id))
   }
   return clips
 }
@@ -157,9 +164,16 @@ function sliceClip(clip: Clip, start: number, end: number, id = clip.id): Clip {
   const elapsed = start - clip.start
   return {
     ...clip, ...keyframeAt(clip, elapsed / clip.duration), id, start, duration: end - start,
+    ...(clip.kind === 'karaoke' && (start > clip.start + EPSILON || end < clipEnd(clip) - EPSILON) ? { fixedCaptionLength: true } : {}),
     offset: clip.offset + elapsed * clip.speed, endTransform: keyframeAt(clip, (end - clip.start) / clip.duration),
     fadeWindow: clip.fadeIn || clip.fadeOut ? { offset: (clip.fadeWindow?.offset ?? 0) + elapsed, duration: clip.fadeWindow?.duration ?? clip.duration } : undefined,
   }
+}
+function splitClip(clip: Clip, at: number): [Clip, Clip] {
+  const left = sliceClip(clip, clip.start, at)
+  const right = sliceClip(clip, at, clipEnd(clip), crypto.randomUUID())
+  if (clip.karaoke) [left.karaoke, right.karaoke] = splitLyrics(clip.karaoke, right.offset)
+  return [left, right]
 }
 function clipboardOf(state: Editor, clips: Clip[]): Clipboard {
   const bounds = state.range ? rangeBounds(state.range) : { start: Math.min(...clips.map(clip => clip.start)), end: durationOf(clips) }
@@ -180,7 +194,7 @@ function insertClipboard(state: Editor, clipboard: Clipboard, at: number) {
   const pasted: Clip[] = clipboard.clips.map(clip => ({ ...clip, id: crypto.randomUUID(), start: at + clip.start }))
   let clips = [...existing, ...pasted]
   for (const track of tracks) {
-    if (magnetic(state, track)) clips = insertMagnetically(clips, inTrackOrder(pasted, track), track, at)
+    if (magnetic(state, track)) clips = insertMagnetically(clips, clipsOnTrack(pasted, track), track, at)
   }
   const insertedIds = new Set(pasted.map(clip => clip.id))
   const currentTime = Math.min(...clips.filter(clip => insertedIds.has(clip.id)).map(clip => clip.start))
@@ -238,15 +252,17 @@ export const useEditor = create<Editor>((set, get) => ({
     { id: 'annotations', name: 'Annotations', muted: false, locked: false },
     { id: 'overlay', name: 'Webcam / Overlay', muted: false, locked: false },
     { id: 'main', name: 'Screen / Main', muted: false, locked: false },
+    audioTrack,
   ],
   currentTime: 0, ...selection([demoMain.id]), zoomLevel: 36, playing: false, snapping: true,
   playbackStart: 0, markers: [], markersVisible: true,
   past: [], future: [], clipboard: null, rangeMode: false, annotationEditVersion: 0,
-  editAnnotation: id => set(s => {
+  editAnnotation: (id, at, language) => set(s => {
     const clip = s.clips.find(item => item.id === id)
     if (!clip || !isAnnotation(clip.kind) || !unlocked(s, clip.track)) return s
-    const time = s.currentTime >= clip.start && s.currentTime < clipEnd(clip) ? s.currentTime : clip.start + clip.duration / 2
-    return { ...selection([id]), currentTime: time, playing: false, annotationEditVersion: s.annotationEditVersion + 1 }
+    const target = at ?? s.currentTime
+    const time = target >= clip.start && target < clipEnd(clip) ? target : clip.start + clip.duration / 2
+    return { ...selection([id]), currentTime: time, playing: false, annotationEditVersion: s.annotationEditVersion + 1, annotationEditLanguage: language }
   }),
   checkpoint: () => set(s => ({ past: [...s.past.slice(-49), snapshot(s)], future: [] })),
   undo: () => set(s => {
@@ -322,24 +338,68 @@ export const useEditor = create<Editor>((set, get) => ({
     const track = state.tracks.find(item => item.id === id)
     if (!track || (key === 'magnetic' && track.locked)) return
     state.checkpoint()
-    const clips = key === 'magnetic' && !track.magnetic ? packTrack(state.clips, inTrackOrder(state.clips, id)) : state.clips
+    const clips = key === 'magnetic' && !track.magnetic ? packTrack(state.clips, clipsOnTrack(state.clips, id)) : state.clips
     set({ clips, currentTime: Math.min(state.currentTime, durationOf(clips)),
       tracks: state.tracks.map(item => item.id === id ? { ...item, [key]: !item[key] } : item) })
   },
   add: (item, start = get().currentTime, track) => {
-    const clip = makeClip(item, Math.max(0, start), track)
+    let clip = makeClip(item, Math.max(0, start), track)
     const state = get()
     if (!unlocked(state, clip.track)) return
+    if (clip.kind === 'karaoke' && !magnetic(state, clip.track)) {
+      const captions = state.clips.filter(item => item.kind === 'karaoke' && item.track === clip.track)
+      const occupied = captions.find(item => item.start <= clip.start + EPSILON && clipEnd(item) > clip.start + EPSILON)
+      if (occupied) {
+        if (clip.start - occupied.start < MIN_CLIP || clipEnd(occupied) - clip.start < MIN_CLIP) {
+          state.editAnnotation(occupied.id)
+          return occupied.id
+        }
+        const [left, right] = splitClip(occupied, clip.start)
+        state.checkpoint()
+        set({ clips: state.clips.flatMap(item => item === occupied ? [left, right] : [item]) })
+        get().editAnnotation(right.id)
+        return right.id
+      }
+      const next = nextCaptionStart(captions, clip)
+      const duration = Math.min(clip.duration, next - clip.start)
+      if (duration < MIN_CLIP) return undefined
+      clip = { ...clip, duration, ...(duration < clip.duration ? { fixedCaptionLength: true } : {}) }
+    }
     state.checkpoint()
     const appended = [...state.clips, clip]
     const clips = magnetic(state, clip.track) ? insertMagnetically(appended, [clip], clip.track, clip.start) : appended
     set({ clips, ...selection([clip.id]) })
     return clip.id
   },
+  addCaption: () => {
+    const state = get()
+    if (!unlocked(state, 'annotations')) return
+    const bounds = state.range && rangeBounds(state.range)
+    if (!bounds || bounds.end - bounds.start < MIN_CLIP || magnetic(state, 'annotations')) {
+      const id = state.add('karaoke')
+      if (id) get().editAnnotation(id)
+      return
+    }
+    const clip = { ...makeClip('karaoke', bounds.start), duration: bounds.end - bounds.start, fixedCaptionLength: true }
+    const clips = state.clips.flatMap(item => {
+      if (item.kind !== 'karaoke' || item.track !== clip.track || clipEnd(item) <= bounds.start || item.start >= bounds.end) return [item]
+      return [
+        ...(bounds.start - item.start >= MIN_CLIP ? [sliceClip(item, item.start, bounds.start)] : []),
+        ...(clipEnd(item) - bounds.end >= MIN_CLIP ? [sliceClip(item, bounds.end, clipEnd(item), crypto.randomUUID())] : []),
+      ]
+    })
+    state.checkpoint()
+    set({ clips: [...clips, clip], currentTime: clip.start, rangeMode: false })
+    get().editAnnotation(clip.id)
+  },
   change: (id, patch, history = true) => {
     const state = get()
     const clip = state.clips.find(c => c.id === id)
     if (!clip || state.tracks.some(t => t.locked && (t.id === clip.track || t.id === patch.track))) return
+    if (clip.kind === 'karaoke' && patch.duration !== undefined && patch.karaoke === undefined && patch.duration !== clip.duration) {
+      const end = (patch.offset ?? clip.offset) + patch.duration * (patch.speed ?? clip.speed)
+      patch = { ...patch, fixedCaptionLength: true, ...(clip.karaoke && { karaoke: fitLyricEnds(clip.karaoke, end) }) }
+    }
     if (history) state.checkpoint()
     set(s => {
       let clips = s.clips.map(c => c.id === id ? {
@@ -350,9 +410,9 @@ export const useEditor = create<Editor>((set, get) => ({
         if ((patch.start !== undefined || patch.track !== undefined) && magnetic(s, updated.track)) {
           clips = insertMagnetically(clips, [updated], updated.track, updated.start)
         } else if (magnetic(s, updated.track)) {
-          clips = packTrack(clips, inTrackOrder(clips, updated.track))
+          clips = packTrack(clips, clipsOnTrack(clips, updated.track))
         }
-        if (updated.track !== clip.track && magnetic(s, clip.track)) clips = packTrack(clips, inTrackOrder(clips, clip.track))
+        if (updated.track !== clip.track && magnetic(s, clip.track)) clips = packTrack(clips, clipsOnTrack(clips, clip.track))
       }
       return { clips, currentTime: Math.min(s.currentTime, durationOf(clips)) }
     })
@@ -364,8 +424,8 @@ export const useEditor = create<Editor>((set, get) => ({
     const moved = track !== clip.track ? { ...clip, track } : clip
     let clips = moved === clip ? s.clips : s.clips.map(item => item.id === id ? moved : item)
     if (destination && magnetic(s, track)) clips = insertMagnetically(clips, [moved], track, moved.start)
-    else if (magnetic(s, track)) clips = packTrack(clips, inTrackOrder(clips, track))
-    if (track !== clip.track && magnetic(s, clip.track)) clips = packTrack(clips, inTrackOrder(clips, clip.track))
+    else if (magnetic(s, track)) clips = packTrack(clips, clipsOnTrack(clips, track))
+    if (track !== clip.track && magnetic(s, clip.track)) clips = packTrack(clips, clipsOnTrack(clips, clip.track))
     return { clips, currentTime: Math.min(s.currentTime, durationOf(clips)) }
   }),
   split: (allTracks = false) => {
@@ -375,9 +435,9 @@ export const useEditor = create<Editor>((set, get) => ({
     const rightIds: string[] = []
     const clips = state.clips.flatMap(clip => {
       if (!targets.includes(clip)) return [clip]
-      const right = sliceClip(clip, state.currentTime, clipEnd(clip), crypto.randomUUID())
+      const [left, right] = splitClip(clip, state.currentTime)
       rightIds.push(right.id)
-      return [sliceClip(clip, clip.start, state.currentTime), right]
+      return [left, right]
     })
     state.checkpoint()
     set({ clips, ...selection(rightIds), playing: false, rangeMode: false })

@@ -28,8 +28,14 @@ function registerProjectFiles(window) {
     }
   }
 
+  const fileTypes = new Map([
+    ['revie', { title: 'Save ReViE project', name: 'ReViE project' }],
+    ['mp4', { title: 'Export MP4', name: 'MP4 video' }],
+    ['srt', { title: 'Export captions', name: 'SubRip subtitles' }],
+  ])
   ipcMain.handle('project:begin-save', async (event, name, reuse, extension = 'revie') => {
-    if (!ownWindow(event) || opening || transfer || !['revie', 'mp4'].includes(extension) ||
+    const fileType = fileTypes.get(extension)
+    if (!ownWindow(event) || opening || transfer || !fileType ||
       typeof name !== 'string' || name !== basename(name) || !name.endsWith(`.${extension}`)) return false
     const isProject = extension === 'revie'
     opening = true
@@ -37,9 +43,9 @@ function registerProjectFiles(window) {
       let destination = isProject && reuse === true ? lastPath : undefined
       if (!destination) {
         const choice = await dialog.showSaveDialog(window, {
-          title: isProject ? 'Save ReViE project' : 'Export MP4',
+          title: fileType.title,
           defaultPath: name,
-          filters: [{ name: isProject ? 'ReViE project' : 'MP4 video', extensions: [extension] }],
+          filters: [{ name: fileType.name, extensions: [extension] }],
         })
         if (choice.canceled || !choice.filePath) return false
         destination = choice.filePath
