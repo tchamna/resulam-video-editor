@@ -1,6 +1,7 @@
 import { create } from 'zustand'
+import type { Karaoke } from './karaoke'
 
-export type Kind = 'video' | 'audio' | 'image' | 'demo' | 'text' | 'arrow' | 'highlight' | 'blur'
+export type Kind = 'video' | 'audio' | 'image' | 'demo' | 'text' | 'arrow' | 'highlight' | 'blur' | 'karaoke'
 export type TrackId = 'annotations' | 'overlay' | 'main'
 export type FrameSize = { width: number; height: number }
 export type Asset = { id: string; name: string; kind: Kind; duration: number; url?: string; thumb?: string; frameSize?: FrameSize }
@@ -13,6 +14,7 @@ export type Clip = {
   bold: boolean; align: 'left' | 'center' | 'right'; blur: number; redact?: boolean; fadeIn: number; fadeOut: number
   fadeWindow?: { offset: number; duration: number }
   crop?: Crop
+  karaoke?: Karaoke
   silentRanges?: { start: number; end: number }[]
   endTransform?: { x: number; y: number; scale: number }; shape: 'none' | 'circle' | 'rounded'
 }
@@ -54,8 +56,8 @@ export function canvasSizeOf({ clips, assets }: Pick<Project, 'clips' | 'assets'
   }
   return DEFAULT_FRAME
 }
-export const isAnnotation = (kind: Kind) => ['text', 'arrow', 'highlight', 'blur'].includes(kind)
-export const names: Partial<Record<Kind, string>> = { text: 'Text Box', arrow: 'Arrow', highlight: 'Highlight Box', blur: 'Blur / Redact' }
+export const isAnnotation = (kind: Kind) => ['text', 'arrow', 'highlight', 'blur', 'karaoke'].includes(kind)
+export const names: Partial<Record<Kind, string>> = { text: 'Text Box', arrow: 'Arrow', highlight: 'Highlight Box', blur: 'Blur / Redact', karaoke: 'Karaoke captions' }
 export function makeClip(item: Asset | Kind, start: number, track?: TrackId): Clip {
   const asset = typeof item === 'string' ? undefined : item
   const kind = typeof item === 'string' ? item : item.kind

@@ -1,11 +1,11 @@
 import { useMemo, useState, type DragEvent } from 'react'
-import { Aperture, ArrowUpRight, Blend, Circle, Focus, FolderOpen, Plus, RectangleHorizontal, Sparkles, Type } from 'lucide-react'
+import { Aperture, ArrowUpRight, Blend, Captions, Circle, Focus, FolderOpen, Plus, RectangleHorizontal, Sparkles, Type } from 'lucide-react'
 import { type Asset, type Kind, isAnnotation, names, timecode, useEditor } from './store'
 import { thumbnail, thumbnailTime } from './media'
 import { ITEM_TYPE } from './Timeline'
 import { icons, ToolButton } from './ui'
 
-const tabs = [['Media', FolderOpen], ['Annotations', Type], ['Effects', Sparkles]] as const
+const tabs = [['Media', FolderOpen], ['Annotations', Type], ['Effects', Sparkles], ['Captions', Captions]] as const
 type Tab = typeof tabs[number][0]
 const annotations = [
   ['text', 'Custom text and titles'], ['arrow', 'Point out on-screen details'],
@@ -23,6 +23,7 @@ export function Sidebar({ importMedia, disabled }: { importMedia: () => void; di
   const assets = useEditor(s => s.assets)
   const clip = useEditor(s => s.clips.find(c => c.id === s.selectedClipId))
   const locked = useEditor(s => s.tracks.find(t => t.id === clip?.track)?.locked)
+  const captionsLocked = useEditor(s => s.tracks.find(t => t.id === 'annotations')?.locked)
   const thumbnails = useMemo(() => ({ 'demo-screen': thumbnail('demo'), 'demo-overlay': thumbnail('image') }), [])
   function add(item: Asset | Kind) {
     const state = useEditor.getState()
@@ -109,6 +110,13 @@ export function Sidebar({ importMedia, disabled }: { importMedia: () => void; di
               <div className="track-glyph overlay"><Icon size={17} /></div><div><strong>{title}</strong></div><ArrowUpRight size={14} />
             </button>)}
         </div>
+      </>}
+      {tab === 'Captions' && <>
+        <div className="library-heading"><div><h2>Karaoke captions</h2><span>Add an editable caption clip at the playhead</span></div></div>
+        <button type="button" className="library-item" draggable={!disabled && !captionsLocked} disabled={disabled || captionsLocked}
+          onDragStart={event => beginDrag(event, 'karaoke')} onClick={() => add('karaoke')}>
+          <div className="track-glyph annotations"><Captions size={17} /></div><div><strong>Add karaoke captions</strong></div><Plus size={14} />
+        </button>
       </>}
     </div>
   </aside>

@@ -9,7 +9,7 @@ const MAX_ZOOM = 256
 const MIN_TRACK_HEIGHT = 34
 const MAX_TRACK_HEIGHT = 160
 const zoomSlider = (scale: number) => Math.log2(scale)
-const types = ['text', 'arrow', 'highlight', 'blur']
+const types = ['text', 'arrow', 'highlight', 'blur', 'karaoke']
 export const ITEM_TYPE = 'application/x-revie-item'
 const validTrack = (kind: Kind, track: TrackId) => isAnnotation(kind) ? track === 'annotations' : track !== 'annotations'
 const shortcuts = [

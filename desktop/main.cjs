@@ -18,7 +18,7 @@ app.whenReady().then(() => {
   const editor = new BrowserWindow({
     title, width: 1440, height: 900, minWidth: 700, minHeight: 580, backgroundColor: '#101216',
     autoHideMenuBar: true,
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
   editor.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   editor.webContents.on('will-navigate', event => event.preventDefault())

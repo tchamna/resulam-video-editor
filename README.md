@@ -23,6 +23,8 @@ To build the portable folder on Windows x64, run `npm ci`, `npm run build`, `npm
 
 ## Edit a tutorial
 
+For karaoke captions, open the **Captions** tab and add a clip at the playhead. Paste or import UTF-8 TXT, SRT, or the Karaoke Captions word timing TSV. For TXT, set the first and last lyric times to estimate timings by word length. SRT keeps cue times and estimates word timing within each cue. TSV preserves exact word timings. Add an optional second language and choose the **Normal** or **Custom** layout. Apply lyrics to render them in the preview and in MP4 exports. After applying, edit the timing TSV in the lyrics fields to adjust individual words.
+
 - Import MP4, WebM, MP3, or PNG. Drag assets from the media bin onto a track, or click an asset to insert it at the playhead.
 - Drop a video onto the preview or main video track to place it and import it in one step. The first main video sets the canvas dimensions. Hover over a video in the media bin to preview it without sound.
 - Drag the bottom grip or **Alt+drag** a clip to move it. Drag its left or right edge to trim it. Click the time ruler to seek, or drag the playhead to scrub.

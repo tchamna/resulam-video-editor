@@ -1,4 +1,5 @@
 import { type Asset, type Clip, type FrameSize, type TrackId, canvasSizeOf, clamp, DEFAULT_FRAME, durationOf, EMPTY_CROP, timed, useEditor } from './store'
+import { drawKaraoke, loadKaraokeFont } from './karaokeCanvas'
 
 const { width: WIDTH, height: HEIGHT } = DEFAULT_FRAME
 type Layer = { el: HTMLMediaElement; gain?: GainNode }
@@ -254,6 +255,7 @@ export function renderFrame(ctx: Context, time: number, playing: boolean, export
   ctx.fillStyle = '#111519'
   ctx.fillRect(0, 0, width, height)
   for (const clip of active) {
+    if (clip.kind === 'karaoke') continue
     const asset = assets.find(a => a.id === clip.assetId)
     const frame = frameOf(clip, time, ctx.canvas)
     const opacity = opacityAt(clip, time)
@@ -354,10 +356,13 @@ export function renderFrame(ctx: Context, time: number, playing: boolean, export
     }
     ctx.restore()
   }
-  if (!exporting && !active.some(clip => clip.kind !== 'audio')) {
+  if (!exporting && !active.some(clip => clip.kind !== 'audio' && (clip.kind !== 'karaoke' || clip.karaoke?.main.length || clip.karaoke?.second.length))) {
     ctx.textAlign = 'center'
     label(ctx, 'No video at this position', width / 2, height / 2, 24, '#667079')
     ctx.textAlign = 'left'
+  }
+  for (const clip of active) {
+    if (clip.karaoke) drawKaraoke(ctx, clip.karaoke, clip.offset + (time - clip.start) * clip.speed, opacityAt(clip, time))
   }
 }
 
@@ -468,12 +473,13 @@ export async function exportMP4(onProgress: (ratio: number) => void, signal: Abo
   stopMedia()
   enableAudio()
   await audio?.resume()
+  if (state.clips.some(clip => clip.karaoke)) await loadKaraokeFont()
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
-  const ctx = canvas.getContext('2d')!
+  const ctx = canvas.getContext('2d', { alpha: false })!
   const frameInterval = 1000 / 60
-  const videoStream = canvas.captureStream(0)
+  const videoStream = canvas.captureStream(60)
   const videoTrack = videoStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack
   const stream = new MediaStream([videoTrack, ...(capture?.stream.getAudioTracks() ?? [])])
   const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 })
@@ -513,7 +519,7 @@ export async function exportMP4(onProgress: (ratio: number) => void, signal: Abo
           return media && media.readyState >= 2 && !media.seeking
         })
         if (!ready && now - preRoll < 2000) { schedule(prepare, frameInterval); return }
-        recorder.start(250)
+        recorder.start()
         let previous = now
         const render = (tick: number) => {
           if (document.hidden || tick - previous > 500) {
@@ -527,8 +533,8 @@ export async function exportMP4(onProgress: (ratio: number) => void, signal: Abo
             recorder.stop()
             return
           }
-          videoTrack.requestFrame()
           renderFrame(ctx, start + elapsed, true, true)
+          videoTrack.requestFrame()
           onProgress(elapsed / duration)
           const next = now + (Math.floor((tick - now) / frameInterval) + 1) * frameInterval
           schedule(render, Math.max(4, next - performance.now()))

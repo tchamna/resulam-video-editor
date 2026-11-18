@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 
@@ -26,8 +26,9 @@ const bundledBuild = join(appFolder, 'dist')
 await mkdir(bundledBuild)
 await cp(join(build, 'index.html'), join(bundledBuild, 'index.html'))
 await cp(join(build, 'assets'), join(bundledBuild, 'assets'), { recursive: true })
+const { version } = JSON.parse(await readFile(join(import.meta.dirname, 'package.json'), 'utf8'))
 await writeFile(join(appFolder, 'package.json'), JSON.stringify({
-  name: 'revie-desktop', productName: 'Resulam Video Editor - ReViE', version: '1.0.0', main: 'main.cjs',
+  name: 'revie-desktop', productName: 'Resulam Video Editor - ReViE', version, main: 'main.cjs',
 }))
 await writeFile(join(output, 'START-HERE.txt'), [
   'Resulam Video Editor - ReViE',

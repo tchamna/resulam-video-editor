@@ -2,6 +2,7 @@ import { AlignCenter, AlignLeft, AlignRight, AudioLines, Bold, ChevronDown, Crop
 import { useEffect, useRef, type ReactNode } from 'react'
 import { canCrop, clamp, type Clip, EMPTY_CROP, MIN_CLIP, timed, useEditor } from './store'
 import { icons, ToolButton } from './ui'
+import { KaraokeEditor } from './KaraokeEditor'
 
 function Section({ label, icon, children, optional = false }: { label: string; icon: ReactNode; children: ReactNode; optional?: boolean }) {
   return <details className="inspector-section" open={!optional}>
@@ -60,6 +61,7 @@ export function Inspector({ exporting }: { exporting: boolean }) {
         <strong>{clip.name}</strong><span>{track?.name}{track?.locked ? ' · Locked' : ''}</span>
       </div></div>
       <fieldset disabled={exporting || track?.locked}>
+        {clip.kind === 'karaoke' ? <KaraokeEditor clip={clip} inputRef={input => { annotationInput.current = input }} /> : <>
         {clip.kind !== 'audio' && <Section label="Transform" icon={<Move size={15} />}>
           <div className="field-grid">{number('x', 'Position X', '%', -1000, 1000)}{number('y', 'Position Y', '%', -1000, 1000)}</div>
           <div className="field-grid">{number('scale', 'Scale', '%', 1, 800)}{number('rotation', 'Rotation', '°', -360, 360)}</div>
@@ -103,6 +105,7 @@ export function Inspector({ exporting }: { exporting: boolean }) {
           </div>
           <button className="subtle-button" type="button" onClick={() => edit({ endTransform: undefined })}>Remove pan &amp; zoom</button></>}
         </Section>
+        </>}
       </fieldset>
     </div> : <div className="inspector-empty"><SlidersHorizontal size={24} /><p>Select a clip to edit its properties.</p></div>}
   </aside>

@@ -1,11 +1,47 @@
 import assert from 'node:assert/strict'
 import { beforeEach, test } from 'node:test'
 import { canvasSizeOf, durationOf, useEditor, type Asset } from '../src/store.ts'
+import { formatLyrics, karaokePresets, lyricLineAt, parseLyrics } from '../src/karaoke.ts'
 
 const state = useEditor.getState
 const initial = state()
 const main = () => state().clips.filter(clip => clip.track === 'main')
 const timing = () => main().map(clip => [clip.start, clip.duration, clip.offset])
+
+test('bilingual plain text follows the main SRT cue boundaries and keeps tonal spellings', () => {
+  const window = { start: 0, end: 9 }
+  const primary = parseLyrics('1\r\n00:00:01,400 --> 00:00:02,100\r\nNùfī zǎ\r\n\r\n2\r\n00:00:03,200 --> 00:00:04,000\r\nMbe’mbè', window)
+  const translated = parseLyrics('Welcome here\nGood day', window, primary)
+  assert.deepEqual(primary.map(line => line.words.map(word => word.text)), [['Nùfī', 'zǎ'], ['Mbe’mbè']])
+  assert.deepEqual(translated.map(({ start, end }) => [start, end]), [[1.4, 2.1], [3.2, 4]])
+  assert.equal(lyricLineAt(primary, 1.4), primary[0])
+  assert.equal(lyricLineAt(primary, 2.1), undefined)
+  assert.deepEqual(parseLyrics(formatLyrics(primary), window), primary)
+})
+
+test('Karaoke Studio timing TSV retains exact timings and rejects invalid words', () => {
+  const window = { start: 0, end: 10 }
+  const tsv = '\uFEFFLine\tStart(s)\tEnd(s)\tWord\n1\t1.28\t1.64\tLíé’zī\n1\t1.69\t2.25\tZáhnam'
+  const lines = parseLyrics(tsv, window)
+  assert.deepEqual(lines[0].words, [
+    { start: 1.28, end: 1.64, text: 'Líé’zī' }, { start: 1.69, end: 2.25, text: 'Záhnam' },
+  ])
+  assert.throws(() => parseLyrics(tsv.replace('1.69', '1.10'), window), /overlap/)
+  assert.throws(() => parseLyrics('Lyrics', { start: 3, end: 2 }), /after/)
+})
+
+test('splitting and moving a karaoke clip preserves source-relative word timing', () => {
+  const id = state().add('karaoke', 3)!
+  const lyrics = parseLyrics('One two', { start: 0, end: 4 })
+  state().change(id, { karaoke: { main: lyrics, second: [], style: karaokePresets.custom } })
+  state().seek(5)
+  state().split()
+  const right = state().clips.find(clip => clip.id === state().selectedClipId)!
+  assert.equal(right.offset, 2)
+  assert.equal(right.karaoke?.main, lyrics)
+  state().change(right.id, { start: 8 })
+  assert.equal(state().clips.find(clip => clip.id === right.id)?.offset, 2)
+})
 
 beforeEach(() => useEditor.setState(initial, true))
 

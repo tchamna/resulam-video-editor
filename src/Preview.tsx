@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { ChevronDown, Crop, Pause, Play, SkipBack, SkipForward } from 'lucide-react'
 import { canCrop, canvasSizeOf, clamp, durationOf, EMPTY_CROP, timecode, useEditor } from './store'
 import { cropRect, enableAudio, frameOf, opacityAt, preloadMedia, renderFrame, stopMedia, visibleClips } from './media'
+import { loadKaraokeFont } from './karaokeCanvas'
 import { ITEM_TYPE } from './Timeline'
 import { pointerGesture, ToolButton } from './ui'
 
@@ -70,9 +71,13 @@ export function Preview({ exporting }: { exporting: boolean }) {
     let previousWidth = 0
     let clock = 0
     let at = 0
-    preloadMedia()
+    function prepareMedia(state: ReturnType<typeof useEditor.getState>) {
+      preloadMedia()
+      if (state.clips.some(clip => clip.karaoke)) void loadKaraokeFont().then(() => { lastTime = -1 })
+    }
+    prepareMedia(previous)
     const unsubscribe = useEditor.subscribe((next, prior) => {
-      if (next.clips !== prior.clips || next.assets !== prior.assets) preloadMedia()
+      if (next.clips !== prior.clips || next.assets !== prior.assets) prepareMedia(next)
     })
     const step = (now: number) => {
       let state = useEditor.getState()
@@ -93,7 +98,7 @@ export function Preview({ exporting }: { exporting: boolean }) {
       if (shouldDraw) {
         renderFrame(ctx, state.currentTime, state.playing)
         overlay.clearRect(0, 0, frameWidth, frameHeight)
-        const selected = visibleClips(state.currentTime).find(c => c.id === state.selectedClipId && (cropping || c.track !== 'main') && c.kind !== 'audio')
+        const selected = visibleClips(state.currentTime).find(c => c.id === state.selectedClipId && (cropping || c.track !== 'main') && c.kind !== 'audio' && c.kind !== 'karaoke')
         if (selected && !state.playing && !state.tracks.find(t => t.id === selected.track)?.locked) {
           const { x, y, w, h, angle } = frameOf(selected, state.currentTime, ctx.canvas)
           const unit = frameWidth / Math.max(1, width)
@@ -178,7 +183,7 @@ export function Preview({ exporting }: { exporting: boolean }) {
       pointerGesture(event, update, next => { if (next.type === 'pointerup') update(next) })
       return
     }
-    const clips = visibleClips(state.currentTime).filter(c => c.track !== 'main' && c.kind !== 'audio' && !state.tracks.find(t => t.id === c.track)?.locked)
+    const clips = visibleClips(state.currentTime).filter(c => c.track !== 'main' && c.kind !== 'audio' && c.kind !== 'karaoke' && !state.tracks.find(t => t.id === c.track)?.locked)
     const selected = clips.find(c => c.id === state.selectedClipId)
     let clip = selected
     let handle: Handle = 'move'
