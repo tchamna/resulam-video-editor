@@ -244,6 +244,8 @@ button.track-resizer::after{content:"";display:block;width:25px;height:2px;margi
 .range-handle{position:absolute;bottom:0;z-index:3;width:9px;height:10px;background:#9fc9ff;border:1px solid #c8e0ff;border-radius:2px;cursor:ew-resize!important}
 .range-handle.start{margin-left:0}
 .range-handle.end{margin-left:-9px}
+.timeline-marker{position:absolute;bottom:1px;z-index:2;width:11px;height:11px;transform:translateX(-5px) rotate(45deg);border-radius:2px;background:#e5ad58;border:1px solid #ffe1a6}
+.timeline-marker:hover,.timeline-marker:focus-visible{background:#ffe1a6}
 .shortcut-help{display:inline-flex;align-items:center;gap:5px;padding:3px 5px;border-radius:4px}
 .shortcut-help:hover{background:#26323a;color:var(--text)}
 .shortcut-dialog{position:fixed;inset:0;margin:auto;width:min(450px,calc(100vw - 24px));max-height:85vh;padding:21px;background:#1b2027;color:var(--text);border:1px solid #35414a;border-radius:12px;box-shadow:0 15px 35px #0008}
@@ -254,6 +256,8 @@ button.track-resizer::after{content:"";display:block;width:25px;height:2px;margi
 .shortcut-dialog dd{color:var(--mint);text-align:right}
 .shortcut-dialog p{margin:12px 0;color:var(--muted)}
 .shortcut-dialog form{text-align:right}
+.marker-dialog label{display:grid;gap:6px;text-align:left;margin-bottom:14px}
+.marker-dialog input{width:100%;padding:7px;border:1px solid #3a4756;border-radius:4px}
 .toast{position:fixed;right:16px;bottom:43px;z-index:12;display:flex;align-items:center;gap:11px;max-width:calc(100vw - 32px);padding:7px 8px 7px 12px;background:#212b2a;color:#e2f4ed;border:1px solid #47695c;box-shadow:0 12px 28px #0007;border-radius:8px}
 .file-drop,.modal-backdrop{position:fixed;inset:0;z-index:11;display:grid;place-content:center;background:#0b1013bc;backdrop-filter:blur(3px)}
 .file-drop{pointer-events:none;justify-items:center;gap:11px;color:var(--mint);border:2px dashed var(--mint)}

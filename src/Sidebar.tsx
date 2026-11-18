@@ -6,7 +6,7 @@ import { ITEM_TYPE } from './Timeline'
 import { icons, ToolButton } from './ui'
 
 const tabs = [['Media', FolderOpen], ['Annotations', Type], ['Effects', Sparkles], ['Captions', Captions]] as const
-type Tab = typeof tabs[number][0]
+export type SidebarTab = typeof tabs[number][0]
 const annotations = [
   ['text', 'Custom text and titles'], ['arrow', 'Point out on-screen details'],
   ['highlight', 'Outline an area of interest'], ['blur', 'Obscure part of the frame'],
@@ -17,8 +17,9 @@ function beginDrag(event: DragEvent, item: string) {
   event.dataTransfer.effectAllowed = 'copy'
 }
 
-export function Sidebar({ importMedia, disabled }: { importMedia: () => void; disabled: boolean }) {
-  const [tab, setTab] = useState<Tab>('Media')
+export function Sidebar({ importMedia, disabled, tab, setTab }: {
+  importMedia: () => void; disabled: boolean; tab: SidebarTab; setTab: (tab: SidebarTab) => void
+}) {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const assets = useEditor(s => s.assets)
   const clip = useEditor(s => s.clips.find(c => c.id === s.selectedClipId))
@@ -29,7 +30,9 @@ export function Sidebar({ importMedia, disabled }: { importMedia: () => void; di
     const state = useEditor.getState()
     const start = state.currentTime
     state.play(false)
-    state.add(item, start)
+    const id = state.add(item, start)
+    const clip = useEditor.getState().clips.find(item => item.id === id)
+    if (clip) state.seek(clip.start)
   }
   const apply = (effect: 'in' | 'out' | 'zoom' | 'circle' | 'rounded') => {
     if (!clip) return

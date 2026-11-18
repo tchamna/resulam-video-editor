@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 import { ChevronDown, Circle, Download, Film, FolderUp, Plus, Redo2, Square, Undo2, X } from 'lucide-react'
-import { type Asset, durationOf, FRAME, rangeBounds, useEditor } from './store'
+import { type Asset, clamp, durationOf, FRAME, playbackBounds, rangeBounds, timecode, useEditor } from './store'
 import { exportMP4, importFile } from './media'
 import { Inspector } from './Inspector'
 import { Preview, togglePlayback } from './Preview'
-import { Sidebar } from './Sidebar'
-import { Timeline } from './Timeline'
+import { Sidebar, type SidebarTab } from './Sidebar'
+import { Timeline, type TimelineControls } from './Timeline'
 import { ToolButton } from './ui'
+import { shortcutFor } from './shortcuts'
 
 function saveFile(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob)
@@ -19,15 +20,20 @@ function saveFile(blob: Blob, name: string) {
 
 export function App() {
   const files = useRef<HTMLInputElement>(null)
+  const previewCanvas = useRef<HTMLCanvasElement>(null)
+  const spaceGesture = useRef({ held: false, dragged: false })
+  const timeline = useRef<TimelineControls>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const exportController = useRef<AbortController | null>(null)
   const [notice, setNotice] = useState('')
   const [recording, setRecording] = useState(false)
+  const [recordingPaused, setRecordingPaused] = useState(false)
   const [recordPending, setRecordPending] = useState(false)
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<number | null>(null)
   const [menu, setMenu] = useState(false)
   const [fileDrag, setFileDrag] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('Media')
   const dragDepth = useRef(0)
   const titleChanged = useRef(false)
   const title = useEditor(s => s.title)
@@ -55,50 +61,165 @@ export function App() {
   }, [notice])
 
   useEffect(() => {
-    function shortcuts(event: KeyboardEvent) {
-      if (event.defaultPrevented || exporting) return
-      const target = event.target as HTMLElement | null
-      if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), dialog') || event.isComposing) return
-      const state = useEditor.getState()
-      const key = event.key.toLowerCase()
-      const modifier = event.metaKey || event.ctrlKey
-      if (modifier && !event.altKey && ['a', 'x', 'c', 'v', 'd', 'z', 'y'].includes(key)) {
-        event.preventDefault()
-        if (event.repeat) return
-        switch (key) {
-          case 'a': state.selectAll(); break
-          case 'x': copySelection(true); break
-          case 'c': copySelection(); break
-          case 'v': state.paste(); break
-          case 'd': state.duplicate(); break
-          default: if (key === 'y' || event.shiftKey) state.redo(); else state.undo()
-        }
-        return
-      }
-      if (modifier || event.altKey) return
-      if ((key === 'arrowleft' || key === 'arrowright') && !target?.closest('[role="slider"]')) {
-        event.preventDefault()
-        state.play(false)
-        state.seek(state.currentTime + (key === 'arrowleft' ? -1 : 1) * (event.shiftKey ? 1 : FRAME))
-        return
-      }
-      if (![' ', 's', 'r', 'backspace', 'delete', 'escape', 'home', 'end'].includes(key) ||
-          (key === ' ' && target?.closest('button, summary'))) return
+    const editingText = (event: KeyboardEvent) => event.isComposing || (event.target instanceof Element &&
+      !!event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), dialog'))
+
+    function holdSpace(event: KeyboardEvent) {
+      if (shortcutFor(event) !== 'play' || event.defaultPrevented || exporting || editingText(event)) return
       event.preventDefault()
-      if (event.repeat) return
-      switch (key) {
-        case ' ': togglePlayback(); break
-        case 's': state.split(); break
-        case 'r': state.toggleRangeMode(); break
-        case 'backspace':
-        case 'delete': state.remove(event.shiftKey); break
-        case 'escape': setMenu(false); state.select(null); if (state.rangeMode) state.toggleRangeMode(); break
-        default: state.play(false); state.seek(key === 'home' ? 0 : durationOf(state.clips))
+      event.stopPropagation()
+      if (!event.repeat) spaceGesture.current = { held: true, dragged: false }
+    }
+
+    function shortcuts(event: KeyboardEvent) {
+      if (event.defaultPrevented || exporting || editingText(event)) return
+      const target = event.target instanceof Element ? event.target : null
+      const action = shortcutFor(event)
+      if (!action || action === 'play') return
+      event.preventDefault()
+      const repeatable = action.startsWith('frame') && action !== 'frame' ||
+        action.startsWith('extend') || ['zoomIn', 'zoomOut', 'heightUp', 'heightDown'].includes(action)
+      if (event.repeat && !repeatable) return
+
+      const state = useEditor.getState()
+      const duration = durationOf(state.clips)
+      const seek = (time: number) => {
+        state.play(false)
+        state.seek(time)
+        timeline.current?.revealPlayhead()
+      }
+      const extend = (time: number, wholeTimeline = false) => {
+        const clip = !wholeTimeline && state.clips.find(item => item.id === state.range?.clipId)
+        const focus = clip ? clamp(time, clip.start, clip.start + clip.duration) : time
+        state.selectRange({ ...(!wholeTimeline && state.range), anchor: state.range?.anchor ?? state.currentTime, focus })
+        timeline.current?.revealPlayhead()
+      }
+      const boundary = (points: number[], forward: boolean, from = state.currentTime) => {
+        const nearby = points.filter(time => forward ? time > from + FRAME / 2 : time < from - FRAME / 2)
+        return nearby.length ? (forward ? Math.min(...nearby) : Math.max(...nearby)) : undefined
+      }
+      const addAnnotation = (kind: 'text' | 'karaoke') => {
+        setSidebarTab(kind === 'text' ? 'Annotations' : 'Captions')
+        state.play(false)
+        const id = state.add(kind)
+        if (id) {
+          state.seek(useEditor.getState().clips.find(clip => clip.id === id)!.start)
+          state.editAnnotation(id)
+        }
+      }
+      switch (action) {
+        case 'restart': seek(playbackBounds(state).start); togglePlayback(); break
+        case 'return': seek(state.playbackStart); break
+        case 'frameBack':
+        case 'frameForward': {
+          const time = state.currentTime + (action === 'frameBack' ? -FRAME : FRAME)
+          if (state.rangeMode && target?.closest('.ruler') && event.key.startsWith('Arrow')) extend(time)
+          else seek(time)
+          break
+        }
+        case 'start': seek(0); break
+        case 'end': seek(duration); break
+        case 'extendStart': extend(0, true); break
+        case 'extendEnd': extend(duration, true); break
+        case 'extendLeft': extend((state.range?.focus ?? state.currentTime) - FRAME); break
+        case 'extendRight': extend((state.range?.focus ?? state.currentTime) + FRAME); break
+        case 'extendSecondLeft': extend((state.range?.focus ?? state.currentTime) - 1); break
+        case 'extendSecondRight': extend((state.range?.focus ?? state.currentTime) + 1); break
+        case 'clipBack':
+        case 'clipForward':
+        case 'extendClipBack':
+        case 'extendClipForward': {
+          const extending = action.startsWith('extend')
+          const points = state.clips.flatMap(clip => [clip.start, clip.start + clip.duration])
+          const time = boundary(points, action.endsWith('Forward'), extending ? state.range?.focus : undefined)
+          if (time !== undefined) { if (extending) extend(time, true); else seek(time) }
+          break
+        }
+        case 'before': state.selectMedia(-1); break
+        case 'after': state.selectMedia(1); break
+        case 'selectAll': state.selectAll(); break
+        case 'clear':
+          setMenu(false)
+          state.select(null)
+          if (event.key === 'Escape' && state.rangeMode) state.toggleRangeMode()
+          break
+        case 'cut': copySelection(true); break
+        case 'copy': copySelection(); break
+        case 'paste': state.paste(); break
+        case 'duplicate': state.duplicate(); break
+        case 'delete': state.remove(); break
+        case 'ripple': state.remove(true); break
+        case 'split': state.split(); break
+        case 'splitAll': state.split(true); break
+        case 'silence': if (state.silence()) setNotice('Audio silenced in the selection.'); break
+        case 'undo': state.undo(); break
+        case 'redo': state.redo(); break
+        case 'zoomIn': timeline.current?.zoom('in'); break
+        case 'zoomOut': timeline.current?.zoom('out'); break
+        case 'zoomFit': timeline.current?.zoom('project'); break
+        case 'zoomRange': timeline.current?.zoom('range'); break
+        case 'zoomMax': timeline.current?.zoom('max'); break
+        case 'heightUp': timeline.current?.resizeTracks(8); break
+        case 'heightDown': timeline.current?.resizeTracks(-8); break
+        case 'snap': state.snap(); break
+        case 'addMarker': state.addMarker(); break
+        case 'markers': state.toggleMarkers(); break
+        case 'markerBack':
+        case 'markerForward':
+        case 'extendMarkerBack':
+        case 'extendMarkerForward': {
+          const extending = action.startsWith('extend')
+          const points = state.markers.map(marker => marker.time).filter(time => time <= duration)
+          const time = boundary(points, action.endsWith('Forward'), extending ? state.range?.focus : undefined)
+          if (time !== undefined) { if (extending) extend(time, true); else seek(time) }
+          break
+        }
+        case 'media': setSidebarTab('Media'); break
+        case 'annotations': setSidebarTab('Annotations'); break
+        case 'effects': setSidebarTab('Effects'); break
+        case 'captions': setSidebarTab('Captions'); break
+        case 'addText': addAnnotation('text'); break
+        case 'addCaption': addAnnotation('karaoke'); break
+        case 'range': state.toggleRangeMode(); break
+        case 'import': if (!importing) { setSidebarTab('Media'); files.current?.click() } break
+        case 'record': if (!recordPending) void recordScreen(); break
+        case 'pauseRecord':
+          if (recorder.current?.state === 'recording') { recorder.current.pause(); setRecordingPaused(true) }
+          else if (recorder.current?.state === 'paused') { recorder.current.resume(); setRecordingPaused(false) }
+          else if (!recordPending) void recordScreen()
+          break
+        case 'stopRecord': if (recorder.current && recorder.current.state !== 'inactive') recorder.current.stop(); break
+        case 'new': if (!recording && !recordPending && !importing) newProject(); break
+        case 'frame': {
+          if (!hasClips) break
+          state.play(false)
+          previewCanvas.current?.toBlob(blob => { if (blob) saveFile(blob, `Frame-${timecode(state.currentTime).replaceAll(':', '-')}.png`) })
+          break
+        }
+        case 'export': void exportProject(); break
+        case 'help': timeline.current?.showShortcuts(); break
       }
     }
+    const releaseSpace = (event: KeyboardEvent) => {
+      if ((event.code !== 'Space' && event.key !== ' ') || !spaceGesture.current.held) return
+      event.preventDefault()
+      event.stopPropagation()
+      const { dragged } = spaceGesture.current
+      spaceGesture.current = { held: false, dragged: false }
+      if (!dragged && !exporting) togglePlayback()
+    }
+    const clearGesture = () => { spaceGesture.current = { held: false, dragged: false } }
+    window.addEventListener('keydown', holdSpace, true)
     window.addEventListener('keydown', shortcuts)
-    return () => window.removeEventListener('keydown', shortcuts)
-  }, [exporting])
+    window.addEventListener('keyup', releaseSpace, true)
+    window.addEventListener('blur', clearGesture)
+    return () => {
+      window.removeEventListener('keydown', holdSpace, true)
+      window.removeEventListener('keydown', shortcuts)
+      window.removeEventListener('keyup', releaseSpace, true)
+      window.removeEventListener('blur', clearGesture)
+    }
+  }, [exporting, exportDisabled, hasClips, importing, recordPending, recording, title])
 
   async function importMedia(list: FileList | File[], dropTime?: number) {
     if (!list.length || exporting || importing) return
@@ -111,16 +232,18 @@ export function App() {
       state.addAssets(imported)
       if (dropTime !== undefined && !state.tracks.find(track => track.id === 'main')?.locked) {
         let position = dropTime
-        let first: string | undefined
+        let first: { id: string; start: number } | undefined
         for (const asset of imported.filter(item => item.kind === 'video')) {
           const id = state.add(asset, position, 'main')
-          first ??= id
-          position += asset.duration
+          const clip = useEditor.getState().clips.find(item => item.id === id)
+          if (!clip) continue
+          first ??= clip
+          position = clip.start + clip.duration
         }
         if (first) {
           state.play(false)
-          state.seek(dropTime)
-          state.select(first)
+          state.seek(first.start)
+          state.select(first.id)
         }
       }
       if (failed) setNotice(imported.length ? `Imported ${imported.length}. Could not open ${failed} ${failed === 1 ? 'file' : 'files'}.` : (result[0] as PromiseRejectedResult).reason.message)
@@ -133,7 +256,7 @@ export function App() {
   }
 
   async function recordScreen() {
-    if (recorder.current?.state === 'recording') { recorder.current.stop(); return }
+    if (recorder.current && recorder.current.state !== 'inactive') { recorder.current.stop(); return }
     if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === 'undefined') {
       setNotice('Screen recording requires a supported desktop browser on HTTPS or localhost.')
       return
@@ -148,32 +271,43 @@ export function App() {
       const next = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
       const chunks: Blob[] = []
       const start = performance.now()
+      let pausedAt: number | undefined
+      let pausedDuration = 0
       recorder.current = next
       next.ondataavailable = event => { if (event.data.size) chunks.push(event.data) }
+      next.onpause = () => { pausedAt = performance.now() }
+      next.onresume = () => {
+        if (pausedAt !== undefined) pausedDuration += performance.now() - pausedAt
+        pausedAt = undefined
+      }
       next.onstop = async () => {
         recorder.current = null
         stream?.getTracks().forEach(track => track.stop())
         setRecording(false)
+        setRecordingPaused(false)
         setRecordPending(true)
         try {
           if (!chunks.length) throw new Error('No screen recording was captured.')
           const ext = next.mimeType.includes('mp4') ? 'mp4' : 'webm'
           const file = new File(chunks, `Recording ${new Date().toLocaleTimeString().replaceAll(':', '-') }.${ext}`, { type: next.mimeType })
-          const asset: Asset = await importFile(file, Math.max(.1, (performance.now() - start) / 1000))
+          const elapsed = (pausedAt ?? performance.now()) - start - pausedDuration
+          const asset: Asset = await importFile(file, Math.max(.1, elapsed / 1000))
           const current = useEditor.getState()
           current.addAssets([asset])
           const position = durationOf(current.clips)
-          if (current.add(asset, position, 'main')) current.seek(position)
+          const id = current.add(asset, position, 'main')
+          const clip = useEditor.getState().clips.find(item => item.id === id)
+          if (clip) current.seek(clip.start)
           setNotice('Screen recording added to the media bin.')
         } catch (error) { setNotice((error as Error).message) }
         finally { setRecordPending(false) }
       }
       next.onerror = () => {
         stream?.getTracks().forEach(track => track.stop())
-        setRecording(false); setRecordPending(false); recorder.current = null
+        setRecording(false); setRecordingPaused(false); setRecordPending(false); recorder.current = null
         setNotice('The browser could not complete the recording.')
       }
-      stream.getVideoTracks()[0].addEventListener('ended', () => { if (next.state === 'recording') next.stop() })
+      stream.getVideoTracks()[0].addEventListener('ended', () => { if (next.state !== 'inactive') next.stop() })
       next.start(300)
       setRecording(true)
     } catch (error) {
@@ -205,8 +339,8 @@ export function App() {
   function newProject() {
     const state = useEditor.getState()
     state.checkpoint()
-    useEditor.setState({ title: 'Untitled tutorial', clips: [], assets: [], currentTime: 0, selectedClipId: null, selectedClipIds: [], range: null, rangeMode: false, playing: false,
-      tracks: state.tracks.map(t => ({ ...t, locked: false, muted: false, hidden: false, snappingDisabled: false })) })
+    useEditor.setState({ title: 'Untitled tutorial', clips: [], assets: [], currentTime: 0, playbackStart: 0, markers: [], selectedClipId: null, selectedClipIds: [], range: null, rangeMode: false, playing: false,
+      tracks: state.tracks.map(t => ({ ...t, locked: false, muted: false, hidden: false, magnetic: false })) })
     setMenu(false)
   }
   const hasFiles = (event: DragEvent) => event.dataTransfer.types.includes('Files')
@@ -248,18 +382,18 @@ export function App() {
       <div className="header-actions">
         <button className={`header-action ${recording ? 'recording' : ''}`} type="button" disabled={exporting || recordPending} onClick={() => void recordScreen()}>
           {recording ? <Square size={14} fill="currentColor" /> : <span className="record-icon"><Circle size={14} /><i /></span>}
-          <span>{recording ? 'Stop recording' : recordPending ? 'Preparing…' : 'Record Screen'}</span>
+          <span>{recording ? (recordingPaused ? 'Stop paused recording' : 'Stop recording') : recordPending ? 'Preparing…' : 'Record Screen'}</span>
         </button>
         <button className="header-action" type="button" disabled={exporting || importing} onClick={showImport}><FolderUp size={16} /><span>{importing ? 'Importing…' : 'Import Media'}</span></button>
         <button className="export-button" type="button" title="Export the full project" disabled={exportDisabled} onClick={() => void exportProject()}><Download size={16} /><span>Export MP4</span></button>
       </div>
     </header>
     <main className="workspace">
-      <Sidebar importMedia={showImport} disabled={exporting || importing} />
-      <Preview exporting={exporting} />
+      <Sidebar importMedia={showImport} disabled={exporting || importing} tab={sidebarTab} setTab={setSidebarTab} />
+      <Preview exporting={exporting} canvas={previewCanvas} spaceGesture={spaceGesture} />
       <Inspector exporting={exporting} />
     </main>
-    <Timeline disabled={exporting} copySelection={copySelection} exportDisabled={exportDisabled} exportSelection={() => void exportProject(true)} />
+    <Timeline ref={timeline} disabled={exporting} copySelection={copySelection} exportDisabled={exportDisabled} exportSelection={() => void exportProject(true)} />
     {notice && <div className="toast" role="status"><span>{notice}</span><ToolButton label="Dismiss notification" onClick={() => setNotice('')}><X size={16} /></ToolButton></div>}
     {fileDrag && <div className="file-drop"><FolderUp size={34} /><strong>Drop files to import media</strong></div>}
     {exporting && <div className="modal-backdrop">

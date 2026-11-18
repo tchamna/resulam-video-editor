@@ -20,6 +20,7 @@ app.whenReady().then(() => {
     autoHideMenuBar: true,
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
+  editor.removeMenu()
   editor.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   editor.webContents.on('will-navigate', event => event.preventDefault())
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => {

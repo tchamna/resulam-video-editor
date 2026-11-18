@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { beforeEach, test } from 'node:test'
 import { canvasSizeOf, durationOf, useEditor, type Asset } from '../src/store.ts'
 import { formatLyrics, karaokePresets, lyricLineAt, parseLyrics } from '../src/karaoke.ts'
+import { shortcutFor } from '../src/shortcuts.ts'
 
 const state = useEditor.getState
 const initial = state()
@@ -44,6 +45,95 @@ test('splitting and moving a karaoke clip preserves source-relative word timing'
 })
 
 beforeEach(() => useEditor.setState(initial, true))
+
+test('range playback starts at the selection, resumes inside it, and stops at its end', () => {
+  state().selectRange({ anchor: 6, focus: 9, track: 'main' })
+  state().play(true)
+  assert.equal(state().currentTime, 6)
+  state().advancePlayback(7)
+  state().play(false)
+  state().play(true)
+  assert.equal(state().currentTime, 7)
+  state().advancePlayback(10)
+  assert.equal(state().currentTime, 9)
+  assert.equal(state().playing, false)
+  assert.deepEqual(state().range, { anchor: 6, focus: 9, track: 'main' })
+  state().play(true)
+  assert.equal(state().currentTime, 6)
+})
+
+test('reverse drags and empty ranges play from the expected position', () => {
+  state().selectRange({ anchor: 6, focus: 2 })
+  state().play(true)
+  assert.equal(state().currentTime, 2)
+  state().advancePlayback(8)
+  assert.equal(state().currentTime, 6)
+  state().selectRange({ anchor: 8, focus: 8 })
+  state().play(true)
+  state().advancePlayback(10)
+  assert.equal(state().currentTime, 10)
+  assert.equal(state().playing, true)
+})
+
+test('split all ignores a clip selection and respects locked tracks', () => {
+  state().toggleTrack('overlay', 'locked')
+  state().seek(5)
+  state().split(true)
+  assert.deepEqual(main().map(clip => clip.start), [0, 5])
+  assert.equal(state().clips.filter(clip => clip.kind === 'text').length, 2)
+  assert.equal(state().clips.filter(clip => clip.track === 'overlay').length, 1)
+})
+
+test('magnetic tracks pack gaps, insert at a boundary, reorder, trim and close gaps on delete', () => {
+  const original = main()[0]
+  const asset = { id: 'short', name: 'Short', kind: 'video', duration: 2 } as const
+  state().change(original.id, { start: 3, duration: 5 })
+  const second = state().add(asset, 12)!
+  state().toggleTrack('main', 'magnetic')
+  const positions = () => main().sort((a, b) => a.start - b.start).map(clip => [clip.id, clip.start])
+  assert.deepEqual(positions(), [[original.id, 0], [second, 5]])
+  const third = state().add(asset, 4)!
+  assert.deepEqual(positions(), [[original.id, 0], [third, 5], [second, 7]])
+  state().change(second, { start: 1 }, false)
+  state().settleClip(second, 'main')
+  assert.deepEqual(positions(), [[second, 0], [original.id, 2], [third, 7]])
+  state().change(original.id, { duration: 3 })
+  assert.deepEqual(positions(), [[second, 0], [original.id, 2], [third, 5]])
+  state().select(second)
+  state().remove()
+  assert.deepEqual(positions(), [[original.id, 0], [third, 3]])
+  state().undo()
+  assert.deepEqual(positions(), [[second, 0], [original.id, 2], [third, 5]])
+  state().toggleTrack('main', 'magnetic')
+  state().change(third, { start: 20 })
+  assert.deepEqual(positions(), [[second, 0], [original.id, 2], [third, 20]])
+})
+
+test('pasting onto a magnetic track inserts whole clips without splitting the destination', () => {
+  const original = main()[0]
+  state().toggleTrack('main', 'magnetic')
+  state().selectRange({ anchor: 2, focus: 3, track: 'main' })
+  state().copy()
+  state().select(null)
+  state().seek(8)
+  assert.equal(state().paste(), true)
+  assert.equal(main().length, 2)
+  assert.equal(main().find(clip => clip.id === original.id)?.start, 1)
+  assert.equal(state().currentTime, 0)
+})
+
+test('shifted punctuation and modifier shortcuts resolve to distinct actions', () => {
+  const press = (key: string, code: string, modifiers = {}) => shortcutFor({
+    key, code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...modifiers,
+  })
+  assert.equal(press(' ', 'Space'), 'play')
+  assert.equal(press('S', 'KeyS', { ctrlKey: true, shiftKey: true }), 'splitAll')
+  assert.equal(press('S', 'KeyS', { shiftKey: true }), 'silence')
+  assert.equal(press('>', 'Period', { shiftKey: true }), 'extendRight')
+  assert.equal(press('*', 'Digit8', { ctrlKey: true, shiftKey: true }), 'zoomRange')
+  assert.equal(press('}', 'BracketRight', { ctrlKey: true, shiftKey: true }), 'extendMarkerForward')
+  assert.equal(press('Delete', 'Delete', { ctrlKey: true }), 'ripple')
+})
 
 test('cutting a range preserves both fragments and their source offsets', () => {
   const clip = main()[0]

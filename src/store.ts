@@ -18,26 +18,32 @@ export type Clip = {
   silentRanges?: { start: number; end: number }[]
   endTransform?: { x: number; y: number; scale: number }; shape: 'none' | 'circle' | 'rounded'
 }
-type Track = { id: TrackId; name: string; muted: boolean; locked: boolean; hidden?: boolean; snappingDisabled?: boolean }
-type Project = { title: string; assets: Asset[]; clips: Clip[]; tracks: Track[] }
+type Track = { id: TrackId; name: string; muted: boolean; locked: boolean; hidden?: boolean; magnetic?: boolean }
+type Marker = { id: string; time: number; name: string }
+type Project = { title: string; assets: Asset[]; clips: Clip[]; tracks: Track[]; markers: Marker[] }
 type TimeRange = { anchor: number; focus: number; track?: TrackId; clipId?: string }
 type Selection = { selectedClipId: string | null; selectedClipIds: string[]; range: TimeRange | null }
 type Snapshot = Project & Selection & { currentTime: number }
 type Clipboard = { clips: Clip[]; assets: Asset[]; duration: number }
 type Editor = Project & {
   currentTime: number; selectedClipId: string | null; zoomLevel: number; playing: boolean; snapping: boolean
+  playbackStart: number; markersVisible: boolean
   selectedClipIds: string[]; range: TimeRange | null; clipboard: Clipboard | null; rangeMode: boolean
   annotationEditVersion: number; editAnnotation: (id: string) => void
   past: Snapshot[]; future: Snapshot[]
   checkpoint: () => void; undo: () => void; redo: () => void
   titleTo: (title: string) => void; addAssets: (assets: Asset[]) => void
   select: (id: string | null) => void; seek: (time: number) => void; play: (playing: boolean) => void
+  advancePlayback: (time: number) => void
   toggleSelection: (id: string) => void; selectAll: (track?: TrackId) => void; selectRange: (range: TimeRange) => void; toggleRangeMode: () => void
   copy: (cut?: boolean) => boolean; paste: () => boolean; duplicate: () => boolean
-  zoom: (zoomLevel: number) => void; snap: () => void; toggleTrack: (id: TrackId, key: 'muted' | 'locked' | 'hidden' | 'snappingDisabled') => void
+  zoom: (zoomLevel: number) => void; snap: () => void; toggleTrack: (id: TrackId, key: 'muted' | 'locked' | 'hidden' | 'magnetic') => void
   add: (item: Asset | Kind, start?: number, track?: TrackId) => string | undefined
   change: (id: string, patch: Partial<Clip>, history?: boolean) => void
-  split: () => void; remove: (ripple?: boolean) => void; silence: () => boolean
+  settleClip: (id: string, destination?: TrackId) => void
+  split: (allTracks?: boolean) => void; remove: (ripple?: boolean) => void; silence: () => boolean
+  addMarker: () => void; changeMarker: (id: string, name: string | null) => void; toggleMarkers: () => void
+  selectMedia: (direction: -1 | 1) => void
 }
 export const FRAME = 1 / 60
 export const MIN_CLIP = FRAME
@@ -82,7 +88,7 @@ const demoOverlay = { ...makeClip(logo, 7.5), h: 25, w: 24, x: 83, y: 76 }
 const demoText = { ...makeClip('text', 2), name: 'Getting started', text: 'Getting started', duration: 6, x: 39, y: 83, w: 30 }
 const demoHighlight = { ...makeClip('highlight', 17), duration: 7, x: 64, y: 34, w: 38, h: 33 }
 const selection = (ids: string[] = [], range: TimeRange | null = null): Selection => ({ selectedClipIds: ids, selectedClipId: ids.at(-1) ?? null, range })
-const snapshot = (s: Editor): Snapshot => ({ title: s.title, assets: s.assets, clips: s.clips, tracks: s.tracks, currentTime: s.currentTime, ...selection(s.selectedClipIds, s.range) })
+const snapshot = (s: Editor): Snapshot => ({ title: s.title, assets: s.assets, clips: s.clips, tracks: s.tracks, markers: s.markers, currentTime: s.currentTime, ...selection(s.selectedClipIds, s.range) })
 const keyframeAt = (clip: Clip, ratio: number) => clip.endTransform && ({
   x: clip.x + (clip.endTransform.x - clip.x) * ratio,
   y: clip.y + (clip.endTransform.y - clip.y) * ratio,
@@ -90,7 +96,44 @@ const keyframeAt = (clip: Clip, ratio: number) => clip.endTransform && ({
 })
 const clipEnd = (clip: Clip) => clip.start + clip.duration
 export const rangeBounds = (range: TimeRange) => ({ start: Math.min(range.anchor, range.focus), end: Math.max(range.anchor, range.focus) })
+export function playbackBounds({ range, clips }: Pick<Editor, 'range' | 'clips'>) {
+  const duration = durationOf(clips)
+  if (range) {
+    const bounds = rangeBounds(range)
+    const start = Math.min(bounds.start, duration)
+    const end = Math.min(bounds.end, duration)
+    if (end - start > EPSILON) return { start, end }
+  }
+  return { start: 0, end: duration }
+}
 const unlocked = (state: Editor, track: TrackId) => !state.tracks.find(item => item.id === track)?.locked
+const magnetic = (state: Editor, id: TrackId) => state.tracks.some(track => track.id === id && track.magnetic && !track.locked)
+const inTrackOrder = (clips: Clip[], track: TrackId) => clips.filter(clip => clip.track === track).sort((a, b) => a.start - b.start)
+
+function packTrack(clips: Clip[], ordered: Clip[]) {
+  const byId = new Map<string, Clip>()
+  let start = 0
+  for (const clip of ordered) {
+    byId.set(clip.id, clip.start === start ? clip : { ...clip, start })
+    start += clip.duration
+  }
+  return clips.map(clip => byId.get(clip.id) ?? clip)
+}
+
+function insertMagnetically(clips: Clip[], additions: Clip[], track: TrackId, time: number) {
+  const ids = new Set(additions.map(clip => clip.id))
+  const ordered = inTrackOrder(clips, track).filter(clip => !ids.has(clip.id))
+  const index = ordered.findIndex(clip => time < clip.start + clip.duration / 2)
+  ordered.splice(index < 0 ? ordered.length : index, 0, ...additions)
+  return packTrack(clips, ordered)
+}
+
+function compactMagneticTracks(state: Editor, clips: Clip[]) {
+  for (const track of state.tracks) {
+    if (magnetic(state, track.id)) clips = packTrack(clips, inTrackOrder(clips, track.id))
+  }
+  return clips
+}
 const inRange = (clip: Clip, range: TimeRange) => {
   const { start, end } = rangeBounds(range)
   return end - start > EPSILON && (!range.track || clip.track === range.track) &&
@@ -102,12 +145,12 @@ export function affectedClips(state: Editor, editable = true) {
     return selected && (!editable || unlocked(state, clip.track))
   })
 }
-export function splitTargets(state: Editor) {
+export function splitTargets(state: Editor, allTracks = false) {
   return state.clips.filter(clip =>
     unlocked(state, clip.track) &&
-    (!state.selectedClipIds.length || state.selectedClipIds.includes(clip.id)) &&
-    (!state.range?.track || state.range.track === clip.track) &&
-    (!state.range?.clipId || state.range.clipId === clip.id) &&
+    (allTracks || ((!state.selectedClipIds.length || state.selectedClipIds.includes(clip.id)) &&
+      (!state.range?.track || state.range.track === clip.track) &&
+      (!state.range?.clipId || state.range.clipId === clip.id))) &&
     state.currentTime - clip.start >= MIN_CLIP - EPSILON && clipEnd(clip) - state.currentTime >= MIN_CLIP - EPSILON)
 }
 function sliceClip(clip: Clip, start: number, end: number, id = clip.id): Clip {
@@ -129,14 +172,20 @@ function clipboardOf(state: Editor, clips: Clip[]): Clipboard {
 function insertClipboard(state: Editor, clipboard: Clipboard, at: number) {
   const tracks = new Set(clipboard.clips.map(clip => clip.track))
   if ([...tracks].some(track => !unlocked(state, track))) return null
-  const clips = state.clips.flatMap(clip => {
-    if (!tracks.has(clip.track) || clipEnd(clip) <= at + EPSILON) return [clip]
+  const existing = state.clips.flatMap(clip => {
+    if (!tracks.has(clip.track) || magnetic(state, clip.track) || clipEnd(clip) <= at + EPSILON) return [clip]
     if (clip.start >= at - EPSILON) return [{ ...clip, start: clip.start + clipboard.duration }]
     return [sliceClip(clip, clip.start, at), { ...sliceClip(clip, at, clipEnd(clip), crypto.randomUUID()), start: at + clipboard.duration }]
   })
-  const pasted = clipboard.clips.map(clip => ({ ...clip, id: crypto.randomUUID(), start: at + clip.start }))
-  return { clips: [...clips, ...pasted], assets: [...state.assets, ...clipboard.assets.filter(asset => !state.assets.some(existing => existing.id === asset.id))],
-    ...selection(pasted.map(clip => clip.id)), currentTime: at, playing: false }
+  const pasted: Clip[] = clipboard.clips.map(clip => ({ ...clip, id: crypto.randomUUID(), start: at + clip.start }))
+  let clips = [...existing, ...pasted]
+  for (const track of tracks) {
+    if (magnetic(state, track)) clips = insertMagnetically(clips, inTrackOrder(pasted, track), track, at)
+  }
+  const insertedIds = new Set(pasted.map(clip => clip.id))
+  const currentTime = Math.min(...clips.filter(clip => insertedIds.has(clip.id)).map(clip => clip.start))
+  return { clips, assets: [...state.assets, ...clipboard.assets.filter(asset => !state.assets.some(existing => existing.id === asset.id))],
+    ...selection([...insertedIds]), currentTime: [...tracks].some(track => magnetic(state, track)) ? currentTime : at, playing: false }
 }
 function removeSelection(state: Editor, ripple = false) {
   let range = state.range
@@ -191,6 +240,7 @@ export const useEditor = create<Editor>((set, get) => ({
     { id: 'main', name: 'Screen / Main', muted: false, locked: false },
   ],
   currentTime: 0, ...selection([demoMain.id]), zoomLevel: 36, playing: false, snapping: true,
+  playbackStart: 0, markers: [], markersVisible: true,
   past: [], future: [], clipboard: null, rangeMode: false, annotationEditVersion: 0,
   editAnnotation: id => set(s => {
     const clip = s.clips.find(item => item.id === id)
@@ -225,8 +275,9 @@ export const useEditor = create<Editor>((set, get) => ({
     if (!selected.length) return false
     const clipboard = clipboardOf(state, selected)
     if (!cut) { set({ clipboard }); return true }
-    const clips = removeSelection(state, true)
-    if (!clips) return false
+    const remaining = removeSelection(state, true)
+    if (!remaining) return false
+    const clips = compactMagneticTracks(state, remaining)
     state.checkpoint()
     const start = state.range ? rangeBounds(state.range).start : Math.min(...selected.map(clip => clip.start))
     set({ clipboard, clips, ...selection(), playing: false, currentTime: Math.min(start, durationOf(clips)) })
@@ -254,20 +305,35 @@ export const useEditor = create<Editor>((set, get) => ({
   },
   seek: currentTime => set(s => ({ currentTime: clamp(currentTime, 0, durationOf(s.clips)) })),
   play: playing => set(s => {
-    const duration = durationOf(s.clips)
-    return { playing: playing && duration > 0, currentTime: playing && s.currentTime >= duration ? 0 : s.currentTime }
+    if (!playing) return { playing: false }
+    const { start, end } = playbackBounds(s)
+    const currentTime = s.currentTime < start || s.currentTime >= end - EPSILON ? start : s.currentTime
+    return { playing: end > start, currentTime, playbackStart: currentTime }
+  }),
+  advancePlayback: time => set(s => {
+    if (!s.playing) return s
+    const { start, end } = playbackBounds(s)
+    return { currentTime: clamp(time, start, end), playing: time < end }
   }),
   zoom: zoomLevel => set({ zoomLevel }),
   snap: () => set(s => ({ snapping: !s.snapping })),
   toggleTrack: (id, key) => {
-    get().checkpoint()
-    set(s => ({ tracks: s.tracks.map(t => t.id === id ? { ...t, [key]: !t[key] } : t) }))
+    const state = get()
+    const track = state.tracks.find(item => item.id === id)
+    if (!track || (key === 'magnetic' && track.locked)) return
+    state.checkpoint()
+    const clips = key === 'magnetic' && !track.magnetic ? packTrack(state.clips, inTrackOrder(state.clips, id)) : state.clips
+    set({ clips, currentTime: Math.min(state.currentTime, durationOf(clips)),
+      tracks: state.tracks.map(item => item.id === id ? { ...item, [key]: !item[key] } : item) })
   },
   add: (item, start = get().currentTime, track) => {
     const clip = makeClip(item, Math.max(0, start), track)
-    if (get().tracks.find(t => t.id === clip.track)?.locked) return
-    get().checkpoint()
-    set(s => ({ clips: [...s.clips, clip], ...selection([clip.id]) }))
+    const state = get()
+    if (!unlocked(state, clip.track)) return
+    state.checkpoint()
+    const appended = [...state.clips, clip]
+    const clips = magnetic(state, clip.track) ? insertMagnetically(appended, [clip], clip.track, clip.start) : appended
+    set({ clips, ...selection([clip.id]) })
     return clip.id
   },
   change: (id, patch, history = true) => {
@@ -276,15 +342,35 @@ export const useEditor = create<Editor>((set, get) => ({
     if (!clip || state.tracks.some(t => t.locked && (t.id === clip.track || t.id === patch.track))) return
     if (history) state.checkpoint()
     set(s => {
-      const clips = s.clips.map(c => c.id === id ? {
+      let clips = s.clips.map(c => c.id === id ? {
         ...c, ...(patch.fadeIn !== undefined || patch.fadeOut !== undefined ? { fadeWindow: undefined } : {}), ...patch,
       } : c)
+      if (history && (patch.start !== undefined || patch.duration !== undefined || patch.track !== undefined)) {
+        const updated = clips.find(item => item.id === id)!
+        if ((patch.start !== undefined || patch.track !== undefined) && magnetic(s, updated.track)) {
+          clips = insertMagnetically(clips, [updated], updated.track, updated.start)
+        } else if (magnetic(s, updated.track)) {
+          clips = packTrack(clips, inTrackOrder(clips, updated.track))
+        }
+        if (updated.track !== clip.track && magnetic(s, clip.track)) clips = packTrack(clips, inTrackOrder(clips, clip.track))
+      }
       return { clips, currentTime: Math.min(s.currentTime, durationOf(clips)) }
     })
   },
-  split: () => {
+  settleClip: (id, destination) => set(s => {
+    const clip = s.clips.find(item => item.id === id)
+    if (!clip || !unlocked(s, clip.track) || (destination && !unlocked(s, destination))) return s
+    const track = destination ?? clip.track
+    const moved = track !== clip.track ? { ...clip, track } : clip
+    let clips = moved === clip ? s.clips : s.clips.map(item => item.id === id ? moved : item)
+    if (destination && magnetic(s, track)) clips = insertMagnetically(clips, [moved], track, moved.start)
+    else if (magnetic(s, track)) clips = packTrack(clips, inTrackOrder(clips, track))
+    if (track !== clip.track && magnetic(s, clip.track)) clips = packTrack(clips, inTrackOrder(clips, clip.track))
+    return { clips, currentTime: Math.min(s.currentTime, durationOf(clips)) }
+  }),
+  split: (allTracks = false) => {
     const state = get()
-    const targets = splitTargets(state)
+    const targets = splitTargets(state, allTracks)
     if (!targets.length) return
     const rightIds: string[] = []
     const clips = state.clips.flatMap(clip => {
@@ -298,8 +384,9 @@ export const useEditor = create<Editor>((set, get) => ({
   },
   remove: (ripple = false) => {
     const state = get()
-    const clips = removeSelection(state, ripple)
-    if (!clips) return
+    const remaining = removeSelection(state, ripple)
+    if (!remaining) return
+    const clips = compactMagneticTracks(state, remaining)
     state.checkpoint()
     const start = state.range ? rangeBounds(state.range).start : state.currentTime
     set({ clips, ...selection(), playing: false, currentTime: Math.min(start, durationOf(clips)) })
@@ -327,6 +414,31 @@ export const useEditor = create<Editor>((set, get) => ({
     set({ clips, playing: false })
     return true
   },
+  addMarker: () => {
+    const { markers, currentTime, clips, checkpoint } = get()
+    if (!clips.length) return
+    if (markers.some(marker => Math.abs(marker.time - currentTime) < FRAME / 2)) {
+      set({ markersVisible: true })
+      return
+    }
+    checkpoint()
+    const marker = { id: crypto.randomUUID(), time: currentTime, name: `Marker ${markers.length + 1}` }
+    set({ markers: [...markers, marker].sort((a, b) => a.time - b.time), markersVisible: true })
+  },
+  changeMarker: (id, name) => {
+    const { markers, checkpoint } = get()
+    const marker = markers.find(item => item.id === id)
+    if (!marker || name === marker.name) return
+    checkpoint()
+    set({ markers: name === null ? markers.filter(item => item.id !== id) :
+      markers.map(item => item.id === id ? { ...item, name: name.trim() || item.name } : item) })
+  },
+  toggleMarkers: () => set(s => ({ markersVisible: !s.markersVisible })),
+  selectMedia: direction => set(s => {
+    const ids = s.clips.filter(clip => direction < 0 ? clipEnd(clip) <= s.currentTime + EPSILON : clip.start >= s.currentTime - EPSILON)
+      .map(clip => clip.id)
+    return selection(ids)
+  }),
 }))
 
 export function timecode(seconds: number) {

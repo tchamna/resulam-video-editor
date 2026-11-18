@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent, type RefObject } from 'react'
 import { ChevronDown, Crop, Pause, Play, SkipBack, SkipForward } from 'lucide-react'
 import { canCrop, canvasSizeOf, clamp, durationOf, EMPTY_CROP, timecode, useEditor } from './store'
 import { cropRect, enableAudio, frameOf, opacityAt, preloadMedia, renderFrame, stopMedia, visibleClips } from './media'
@@ -33,8 +33,10 @@ export function togglePlayback() {
   state.play(!state.playing)
 }
 
-export function Preview({ exporting }: { exporting: boolean }) {
-  const canvas = useRef<HTMLCanvasElement>(null)
+export function Preview({ exporting, canvas, spaceGesture }: {
+  exporting: boolean; canvas: RefObject<HTMLCanvasElement | null>
+  spaceGesture: RefObject<{ held: boolean; dragged: boolean }>
+}) {
   const display = useRef<HTMLCanvasElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const [sizing, setSizing] = useState('Fit')
@@ -86,10 +88,7 @@ export function Preview({ exporting }: { exporting: boolean }) {
           at = state.currentTime
           clock = now
         }
-        const end = durationOf(state.clips)
-        const next = Math.min(end, at + (now - clock) / 1000)
-        state.seek(next)
-        if (next >= end) state.play(false)
+        state.advancePlayback(at + (now - clock) / 1000)
         state = useEditor.getState()
       }
       const width = canvas.current!.clientWidth
@@ -137,18 +136,30 @@ export function Preview({ exporting }: { exporting: boolean }) {
     }
     raf = requestAnimationFrame(step)
     return () => { cancelAnimationFrame(raf); unsubscribe(); stopMedia() }
-  }, [exporting, frameWidth, frameHeight, cropping])
+  }, [canvas, exporting, frameWidth, frameHeight, cropping])
 
   function startGesture(event: PointerEvent<HTMLCanvasElement>) {
     if (exporting || event.button !== 0) return
+    if (spaceGesture.current.held && stage.current) {
+      event.preventDefault()
+      spaceGesture.current.dragged = true
+      const viewport = stage.current
+      const { clientX, clientY } = event
+      const { scrollLeft, scrollTop } = viewport
+      pointerGesture(event, next => {
+        viewport.scrollLeft = scrollLeft + clientX - next.clientX
+        viewport.scrollTop = scrollTop + clientY - next.clientY
+      })
+      return
+    }
     const state = useEditor.getState()
     const bounds = event.currentTarget.getBoundingClientRect()
     if (!bounds.width || !bounds.height) return
     const size = { width: frameWidth, height: frameHeight }
     const convert = (px: number, py: number) => ({ x: (px - bounds.left) / bounds.width * frameWidth, y: (py - bounds.top) / bounds.height * frameHeight })
     const origin = convert(event.clientX, event.clientY)
-    if (cropping) {
-      const clip = visibleClips(state.currentTime).find(c => c.id === cropClipId)
+    if (cropping || (event.altKey && cropAvailable)) {
+      const clip = visibleClips(state.currentTime).find(c => c.id === selectedClip?.id)
       if (!clip) return
       const frame = frameOf(clip, state.currentTime, size)
       const rect = cropRect(clip, frame)
@@ -161,6 +172,7 @@ export function Preview({ exporting }: { exporting: boolean }) {
       const side = horizontal && Math.min(left, right) <= tolerance ? (left <= right ? 'left' : 'right') : null
       const edge = vertical && Math.min(top, bottom) <= tolerance ? (top <= bottom ? 'top' : 'bottom') : null
       if (!side && !edge) return
+      state.play(false)
       const original = clip.crop ?? EMPTY_CROP
       let changed = false
       const update = (next: globalThis.PointerEvent) => {
@@ -266,7 +278,9 @@ export function Preview({ exporting }: { exporting: boolean }) {
       const asset = state.assets.find(item => item.id === event.dataTransfer.getData(ITEM_TYPE))
       if (asset?.kind !== 'video' && asset?.kind !== 'demo') return
       state.play(false)
-      state.add(asset, state.currentTime, 'main')
+      const id = state.add(asset, state.currentTime, 'main')
+      const clip = useEditor.getState().clips.find(item => item.id === id)
+      if (clip) state.seek(clip.start)
     }}>
       <div className="canvas-wrap" style={{ width, height: width * frameHeight / frameWidth }}>
         <canvas ref={canvas} width={frameWidth} height={frameHeight} aria-label="Video preview" />

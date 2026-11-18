@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent, type Ref } from 'react'
 import { Clapperboard, ClipboardPaste, Copy, Download, Eye, EyeOff, Keyboard, Layers2, Lock, Magnet, Maximize2, Minus, Monitor, Plus, ScanLine, Scissors, Split, Trash2, Type, Unlock, Volume2, VolumeX, X } from 'lucide-react'
 import { affectedClips, clamp, type Clip, durationOf, FRAME, isAnnotation, type Kind, MIN_CLIP, rangeBounds, splitTargets, timecode, timed, type TrackId, useEditor } from './store'
 import { icons, pointerGesture, ToolButton } from './ui'
+import { shortcuts } from './shortcuts'
 
 const trackIcons = { annotations: Type, overlay: Layers2, main: Monitor }
 const MIN_ZOOM = 0.5
@@ -12,23 +13,12 @@ const zoomSlider = (scale: number) => Math.log2(scale)
 const types = ['text', 'arrow', 'highlight', 'blur', 'karaoke']
 export const ITEM_TYPE = 'application/x-revie-item'
 const validTrack = (kind: Kind, track: TrackId) => isAnnotation(kind) ? track === 'annotations' : track !== 'annotations'
-const shortcuts = [
-  ['Select part of a clip', 'Drag across the clip'],
-  ['Select across tracks', 'Drag the time ruler'],
-  ['Select across clips on one track', 'Shift+drag · R'],
-  ['Move clip', 'Drag the bottom grip · Alt+drag'],
-  ['Select all clips', 'Ctrl/Cmd+A'],
-  ['Add or remove a clip from selection', 'Ctrl/Cmd+click'],
-  ['Cut / Copy / Paste at playhead', 'Ctrl/Cmd+X / C / V'],
-  ['Duplicate selection after its end', 'Ctrl/Cmd+D'],
-  ['Undo / Redo', 'Ctrl/Cmd+Z / Shift+Z · Ctrl+Y'],
-  ['Delete / Ripple delete', 'Delete / Shift+Delete'],
-  ['Split selected clips', 'S'],
-  ['Play / Pause', 'Space'],
-  ['Step one frame / One second', 'Left/Right · Shift+Left/Right'],
-  ['Go to start / End', 'Home / End'],
-  ['Clear selection', 'Esc'],
-]
+export type TimelineControls = {
+  zoom: (action: 'in' | 'out' | 'project' | 'range' | 'max') => void
+  resizeTracks: (delta: number) => void
+  showShortcuts: () => void
+  revealPlayhead: () => void
+}
 function snapTime(time: number, points: number[], pixels: number) {
   let closest = time
   let distance = 8 / pixels
@@ -51,11 +41,12 @@ function Playhead({ pixelsPerSecond, onPointerDown }: {
   return <div className="needle-area" aria-hidden="true"><div className="playhead" style={{ transform: `translateX(${left}px)` }} /></div>
 }
 
-export function Timeline({ disabled, copySelection, exportDisabled, exportSelection }: {
+export function Timeline({ disabled, copySelection, exportDisabled, exportSelection, ref }: {
   disabled: boolean
   copySelection: (cut?: boolean) => void
   exportDisabled: boolean
   exportSelection: () => void
+  ref?: Ref<TimelineControls>
 }) {
   const tracks = useEditor(s => s.tracks)
   const clips = useEditor(s => s.clips)
@@ -71,11 +62,15 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
   const canSplit = useEditor(s => splitTargets(s).length > 0)
   const pps = useEditor(s => s.zoomLevel)
   const snapping = useEditor(s => s.snapping)
+  const markers = useEditor(s => s.markers)
+  const markersVisible = useEditor(s => s.markersVisible)
   const scroll = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const ruler = useRef<HTMLDivElement>(null)
   const zoomScroll = useRef<number | null>(null)
   const shortcutDialog = useRef<HTMLDialogElement>(null)
+  const markerDialog = useRef<HTMLDialogElement>(null)
+  const [markerEdit, setMarkerEdit] = useState<{ id: string; name: string } | null>(null)
   const [over, setOver] = useState<TrackId | null>(null)
   const [gestureWidth, setGestureWidth] = useState(0)
   const [trackHeights, setTrackHeights] = useState<Partial<Record<TrackId, number>>>({})
@@ -95,9 +90,14 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
   }, [clips.length])
 
   useEffect(() => useEditor.subscribe((state, previous) => {
+    if (state.playing && state.currentTime !== previous.currentTime) revealPlayhead()
+  }), [])
+
+  function revealPlayhead() {
     const scroller = scroll.current
     const row = ruler.current
-    if (!scroller || !row || !state.playing || state.currentTime === previous.currentTime) return
+    if (!scroller || !row) return
+    const state = useEditor.getState()
     const view = scroller.getBoundingClientRect()
     const timeline = row.getBoundingClientRect()
     const trackWidth = timeline.left - view.left + scroller.scrollLeft
@@ -106,19 +106,20 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
     if (playheadX < scroller.scrollLeft || playheadX > scroller.scrollLeft + visibleWidth - 18) {
       scroller.scrollLeft = Math.max(0, playheadX - visibleWidth * 0.2)
     }
-  }), [])
+  }
 
-  function changeZoom(scale: number, fit = false) {
+  function changeZoom(scale: number, fit?: 'project' | 'range') {
     const scroller = scroll.current!
     const headerWidth = content.current!.querySelector('.track-heading')!.getBoundingClientRect().width
     const viewWidth = scroller.clientWidth - headerWidth
     const playhead = useEditor.getState().currentTime
     const playheadX = playhead * pps - scroller.scrollLeft
-    const rangeCenter = bounds && (bounds.start + bounds.end) / 2
+    const rangeCenter = fit !== 'project' && bounds ? (bounds.start + bounds.end) / 2 : null
     const visibleAnchor = rangeCenter !== null ? rangeCenter * pps - scroller.scrollLeft : playheadX
     const offset = fit || visibleAnchor < 0 || visibleAnchor > viewWidth ? viewWidth / 2 : visibleAnchor
     const anchor = fit ? rangeCenter ?? duration / 2 : rangeCenter ?? (scroller.scrollLeft + offset) / pps
-    const next = clamp(fit ? (viewWidth - 24) / Math.max(FRAME, bounds ? bounds.end - bounds.start : duration) : scale, MIN_ZOOM, MAX_ZOOM)
+    const span = fit === 'range' && bounds ? bounds.end - bounds.start : duration
+    const next = clamp(fit ? (viewWidth - 24) / Math.max(FRAME, span) : scale, MIN_ZOOM, MAX_ZOOM)
     const nextScroll = Math.max(0, anchor * next - offset)
     if (next === pps) scroller.scrollLeft = nextScroll
     else {
@@ -126,6 +127,37 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
       useEditor.getState().zoom(next)
     }
   }
+
+  useImperativeHandle(ref, () => ({
+    revealPlayhead,
+    showShortcuts: () => { if (!shortcutDialog.current?.open) shortcutDialog.current?.showModal() },
+    resizeTracks: delta => {
+      const heights = tracks.map(track => {
+        const lane = content.current!.querySelector<HTMLElement>(`[data-lane="${track.id}"]`)!
+        return [track.id, clamp(lane.offsetHeight + delta, MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT)]
+      })
+      setTrackHeights(Object.fromEntries(heights))
+    },
+    zoom: (action) => {
+      if (action === 'range' && !bounds) return
+      if (action === 'project' || action === 'range') changeZoom(pps, action)
+      else changeZoom(action === 'max' ? MAX_ZOOM : pps * (action === 'in' ? 1.5 : 1 / 1.5))
+    },
+  }))
+
+  useEffect(() => {
+    const node = scroll.current
+    if (!node || disabled) return
+    function wheel(event: WheelEvent) {
+      if ((!event.ctrlKey && !event.metaKey) || !event.deltaY) return
+      event.preventDefault()
+      if (event.shiftKey && event.deltaY > 0) changeZoom(pps, 'project')
+      else if (event.shiftKey) changeZoom(MAX_ZOOM)
+      else changeZoom(pps * (event.deltaY < 0 ? 1.18 : 1 / 1.18))
+    }
+    node.addEventListener('wheel', wheel, { passive: false })
+    return () => node.removeEventListener('wheel', wheel)
+  })
 
   function resizeTrack(event: ReactPointerEvent<HTMLElement>, track: TrackId) {
     if (disabled || event.button !== 0) return
@@ -144,23 +176,26 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
     const lane = ruler.current!.getBoundingClientRect()
     return Math.max(0, (x - lane.left) / pps)
   }
-  function rangeGesture(event: ReactPointerEvent<HTMLElement>, track?: TrackId, clip?: Clip, onTap?: () => void, fixedEdge?: 'start' | 'end') {
+  function rangeGesture(event: ReactPointerEvent<HTMLElement>, options: {
+    track?: TrackId; clip?: Clip; onTap?: () => void; fixedEdge?: 'start' | 'end'; playheadAnchor?: number
+  } = {}) {
+    const { track, clip, onTap, fixedEdge, playheadAnchor } = options
     event.preventDefault()
     const state = useEditor.getState()
     state.play(false)
     const scroller = scroll.current!
     const points = clip ? [clip.start, clip.start + clip.duration] :
-      [0, duration, ...state.clips.filter(item => (!track || item.track === track) &&
-        !tracks.find(candidate => candidate.id === item.track)?.snappingDisabled).flatMap(item => [item.start, item.start + item.duration])]
-    const snap = (time: number) => state.snapping && !tracks.find(item => item.id === track)?.snappingDisabled ? snapTime(time, points, pps) : time
+      [0, duration, ...state.clips.filter(item => !track || item.track === track).flatMap(item => [item.start, item.start + item.duration])]
+    const snap = (time: number) => state.snapping && !event.ctrlKey && !event.metaKey ? snapTime(time, points, pps) : time
     const min = clip?.start ?? 0
     const max = clip ? clip.start + clip.duration : duration
     const position = (x: number) => clamp(xToTime(x), min, max)
     const pressX = event.clientX
     const fixed = fixedEdge && bounds ? bounds[fixedEdge] : undefined
-    const rawStart = fixed ?? position(pressX)
-    const anchor = fixed ?? snap(rawStart)
-    const offset = fixedEdge && bounds ? bounds[fixedEdge === 'start' ? 'end' : 'start'] - position(pressX) : 0
+    const rawStart = fixed ?? playheadAnchor ?? position(pressX)
+    const anchor = fixed ?? playheadAnchor ?? snap(rawStart)
+    const edgeAt = fixedEdge && bounds ? bounds[fixedEdge === 'start' ? 'end' : 'start'] : playheadAnchor
+    const offset = edgeAt === undefined ? 0 : edgeAt - xToTime(pressX)
     let clientX = pressX
     let animation = 0
     let moved = false
@@ -200,12 +235,14 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
   function adjustRange(event: ReactPointerEvent<HTMLButtonElement>, edge: 'start' | 'end') {
     if (disabled || event.button !== 0 || !range) return
     event.stopPropagation()
-    rangeGesture(event, range.track, clips.find(clip => clip.id === range.clipId), undefined, edge === 'start' ? 'end' : 'start')
+    rangeGesture(event, {
+      track: range.track, clip: clips.find(clip => clip.id === range.clipId), fixedEdge: edge === 'start' ? 'end' : 'start',
+    })
   }
   function scrub(event: ReactPointerEvent<HTMLElement>, track?: TrackId) {
     if (disabled || event.button !== 0) return
     ruler.current?.focus({ preventScroll: true })
-    if (event.shiftKey || rangeMode) { rangeGesture(event, track); return }
+    if (event.shiftKey || rangeMode) { rangeGesture(event, { track }); return }
     const state = useEditor.getState()
     if (state.range) state.select(null)
     state.play(false)
@@ -221,12 +258,12 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
     if (tracks.find(t => t.id === clip.track)?.locked) { state.select(clip.id); return }
     if (!event.altKey && (event.shiftKey || rangeMode)) {
       ruler.current?.focus({ preventScroll: true })
-      rangeGesture(event, clip.track, undefined, () => state.select(clip.id))
+      rangeGesture(event, { track: clip.track, onTap: () => state.select(clip.id) })
       return
     }
     if (!handle && !event.altKey) {
       event.currentTarget.focus({ preventScroll: true })
-      rangeGesture(event, clip.track, clip, () => state.select(clip.id))
+      rangeGesture(event, { track: clip.track, clip, onTap: () => state.select(clip.id) })
       return
     }
     const edge = event.altKey || handle === 'move' ? undefined : handle
@@ -259,12 +296,13 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
       destination = track
       if (!edge) setOver(track === clip.track ? null : track)
       const points = [0, state.currentTime, ...other.filter(c => c.track === track).flatMap(c => [c.start, c.start + c.duration])]
-      const snap = (value: number) => snapping && !tracks.find(item => item.id === track)?.snappingDisabled ? snapTime(value, points, pps) : value
+      const snap = (value: number) => snapping && !next.ctrlKey && !next.metaKey ? snapTime(value, points, pps) : value
       if (edge === 'left') {
         const earliest = media && timed(clip.kind) ? clip.start - clip.offset / clip.speed : 0
         const start = clamp(snap(clip.start + delta), Math.max(0, earliest), end - MIN_CLIP)
         const fadeWindow = clip.fadeWindow && { ...clip.fadeWindow, offset: clip.fadeWindow.offset + start - clip.start }
-        state.change(clip.id, { start, duration: end - start, offset: Math.max(0, clip.offset + (start - clip.start) * clip.speed), fadeWindow }, false)
+        const magnetic = tracks.find(item => item.id === track)?.magnetic
+        state.change(clip.id, { start: magnetic ? clip.start : start, duration: end - start, offset: Math.max(0, clip.offset + (start - clip.start) * clip.speed), fadeWindow }, false)
       } else if (edge === 'right') {
         const max = media && timed(clip.kind) ? Math.max(MIN_CLIP, (media.duration - clip.offset) / clip.speed) : Infinity
         state.change(clip.id, { duration: clamp(snap(end + delta) - clip.start, MIN_CLIP, max) }, false)
@@ -280,7 +318,11 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
     }
     pointerGesture(event, dragClip, next => {
       if (next.type === 'pointerup') dragClip(next, false)
-      if (changed && !edge && destination !== clip.track) state.change(clip.id, { track: destination }, false)
+      if (changed) {
+        state.settleClip(clip.id, edge ? undefined : destination)
+        const placed = useEditor.getState().clips.find(item => item.id === clip.id)
+        if (placed && followPlayhead) state.seek(placed.start + state.currentTime - clip.start)
+      }
       setGestureWidth(0)
       setOver(null)
     })
@@ -297,10 +339,10 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
     const start = xToTime(event.clientX)
     const state = useEditor.getState()
     const points = [0, state.currentTime, ...clips.filter(c => c.track === track).flatMap(c => [c.start, c.start + c.duration])]
-    const position = snapping && !tracks.find(item => item.id === track)?.snappingDisabled ? snapTime(start, points, pps) : start
+    const position = snapping && !event.ctrlKey && !event.metaKey ? snapTime(start, points, pps) : start
     state.play(false)
-    state.add(asset ?? kind, position, track)
-    state.seek(position)
+    const id = state.add(asset ?? kind, position, track)
+    state.seek(useEditor.getState().clips.find(clip => clip.id === id)?.start ?? position)
   }
 
   return <section className={`timeline ${rangeMode ? 'range-mode' : ''}`} aria-label="Timeline">
@@ -320,7 +362,7 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
           <ToolButton label="Zoom out timeline" disabled={pps <= MIN_ZOOM} onClick={() => changeZoom(pps / 1.5)}><Minus size={14} /></ToolButton>
           <input type="range" min={zoomSlider(MIN_ZOOM)} max={zoomSlider(MAX_ZOOM)} step="any" value={zoomSlider(pps)} aria-label="Timeline zoom" aria-valuetext={`${Math.round(pps)} pixels per second`} onChange={e => changeZoom(2 ** +e.target.value)} />
           <ToolButton label="Zoom in timeline" disabled={pps >= MAX_ZOOM} onClick={() => changeZoom(pps * 1.5)}><Plus size={14} /></ToolButton>
-          <ToolButton label={bounds ? 'Fit selection to timeline' : 'Fit project to timeline'} disabled={!duration} onClick={() => changeZoom(pps, true)}><Maximize2 size={13} /></ToolButton>
+          <ToolButton label={bounds ? 'Fit selection to timeline' : 'Fit project to timeline'} disabled={!duration} onClick={() => changeZoom(pps, bounds ? 'range' : 'project')}><Maximize2 size={13} /></ToolButton>
         </div>
       </div>
     </div>
@@ -333,13 +375,6 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
           if (disabled || event.button !== 0) return
           ruler.current?.focus({ preventScroll: true })
           rangeGesture(event)
-        }} onKeyDown={e => {
-          if (disabled || e.target !== e.currentTarget || e.ctrlKey || e.metaKey || e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
-          e.preventDefault()
-          const state = useEditor.getState()
-          const focus = state.currentTime + (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 1 : FRAME)
-          if (state.rangeMode || e.shiftKey) state.selectRange({ ...state.range, anchor: state.range?.anchor ?? state.currentTime, focus })
-          else { state.play(false); state.seek(focus) }
         }}>
           {bounds && <div className="time-range" aria-hidden="true" style={{ left: bounds.start * pps, width: Math.max(2, (bounds.end - bounds.start) * pps) }} />}
           {ticks.map(tick => <span className="ruler-label" key={tick} style={{ left: tick * pps }}>{timecode(tick).slice(tick < 3600 ? 3 : 0)}</span>)}
@@ -348,6 +383,7 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
             event.stopPropagation()
             event.preventDefault()
             ruler.current?.focus({ preventScroll: true })
+            if (event.ctrlKey || event.metaKey) { rangeGesture(event, { playheadAnchor: useEditor.getState().currentTime }); return }
             const state = useEditor.getState()
             const startX = event.clientX
             const startTime = state.currentTime
@@ -355,6 +391,14 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
             const seek = (next: PointerEvent) => state.seek(startTime + (next.clientX - startX) / pps)
             pointerGesture(event, seek, next => { if (next.type === 'pointerup') seek(next) })
           }} />
+          {markersVisible && markers.filter(marker => marker.time <= duration).map(marker =>
+            <button key={marker.id} type="button" className="timeline-marker" style={{ left: marker.time * pps }}
+              aria-label={`${marker.name} at ${timecode(marker.time)}`} title={`${marker.name} · Double-click to edit`} disabled={disabled}
+              onPointerDown={event => event.stopPropagation()} onClick={() => {
+                const state = useEditor.getState()
+                state.play(false)
+                state.seek(marker.time)
+              }} onDoubleClick={() => { setMarkerEdit(marker); markerDialog.current?.showModal() }} />)}
           {bounds && (['start', 'end'] as const).map(edge => <button key={edge} type="button" className={`range-handle ${edge}`} style={{ left: bounds[edge] * pps }}
             aria-label={`Adjust selection ${edge}`} title={`Drag to adjust selection ${edge}`} disabled={disabled} onPointerDown={event => adjustRange(event, edge)}
             onKeyDown={event => {
@@ -390,8 +434,9 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
               </button>
               <ToolButton label={`${track.hidden ? 'Show' : 'Hide'} ${track.name}`} disabled={disabled} className={track.hidden ? 'active' : ''} onClick={() => useEditor.getState().toggleTrack(track.id, 'hidden')}>{track.hidden ? <EyeOff size={14} /> : <Eye size={14} />}</ToolButton>
               <ToolButton label={`${track.muted ? 'Unmute' : 'Mute'} ${track.name}`} disabled={disabled} className={track.muted ? 'active' : ''} onClick={() => useEditor.getState().toggleTrack(track.id, 'muted')}>{track.muted ? <VolumeX size={14} /> : <Volume2 size={14} />}</ToolButton>
-              <ToolButton label={`${track.snappingDisabled ? 'Enable' : 'Disable'} snapping on ${track.name}`} aria-pressed={!track.snappingDisabled && snapping} disabled={disabled || !snapping}
-                className={!track.snappingDisabled && snapping ? 'track-snap-on' : ''} onClick={() => useEditor.getState().toggleTrack(track.id, 'snappingDisabled')}><Magnet size={13} /></ToolButton>
+              <ToolButton label={`${track.magnetic ? 'Disable' : 'Enable'} magnetic track on ${track.name}`} title="Magnetic track automatically closes gaps"
+                aria-pressed={!!track.magnetic} disabled={disabled || track.locked}
+                className={track.magnetic ? 'active' : ''} onClick={() => useEditor.getState().toggleTrack(track.id, 'magnetic')}><Magnet size={13} /></ToolButton>
               <ToolButton label={`${track.locked ? 'Unlock' : 'Lock'} ${track.name}`} disabled={disabled} className={track.locked ? 'active' : ''} onClick={() => useEditor.getState().toggleTrack(track.id, 'locked')}>{track.locked ? <Lock size={13} /> : <Unlock size={13} />}</ToolButton>
             </div>
             <div data-lane={track.id} className={`track-lane ${over === track.id ? 'drop-over' : ''} ${track.hidden ? 'track-hidden' : ''}`} onPointerDown={event => scrub(event, track.id)}
@@ -444,9 +489,26 @@ export function Timeline({ disabled, copySelection, exportDisabled, exportSelect
     </div>
     <dialog ref={shortcutDialog} className="shortcut-dialog" aria-labelledby="shortcut-heading">
       <h2 id="shortcut-heading">Keyboard shortcuts</h2>
-      <dl>{shortcuts.map(([name, keys]) => <div key={name}><dt>{name}</dt><dd>{keys}</dd></div>)}</dl>
-      <p>Drag the ruler to select time across tracks. Click it to move the playhead. Drag across a clip to select part of it, or drag its bottom grip to move it. Paste inserts time on the copied tracks.</p>
+      <dl>{shortcuts.map(([id, name, keys]) => <div key={id}><dt>{name}</dt><dd>{keys}</dd></div>)}</dl>
+      <p>Ctrl+drag the playhead to select across tracks. Drag across a clip to select time, or drag its bottom grip to move it. Ctrl+click adds or removes clips from the selection. Ctrl+scroll zooms the timeline. Hold Space and drag the zoomed preview to pan. Hold Alt and drag an edge of the selected video or image to crop it.</p>
       <form method="dialog"><button type="submit" className="header-action" autoFocus>Close</button></form>
+    </dialog>
+    <dialog ref={markerDialog} className="shortcut-dialog marker-dialog" aria-label="Edit marker">
+      <form onSubmit={event => {
+        event.preventDefault()
+        if (markerEdit) useEditor.getState().changeMarker(markerEdit.id, markerEdit.name)
+        markerDialog.current?.close()
+      }}>
+        <label>Marker name<input value={markerEdit?.name ?? ''} onChange={event => setMarkerEdit(current => current && { ...current, name: event.target.value })} autoFocus /></label>
+        <div className="range-actions">
+          <button type="button" className="header-action" onClick={() => {
+            if (markerEdit) useEditor.getState().changeMarker(markerEdit.id, null)
+            markerDialog.current?.close()
+          }}>Remove</button>
+          <button type="button" className="header-action" onClick={() => markerDialog.current?.close()}>Cancel</button>
+          <button type="submit" className="header-action">Save</button>
+        </div>
+      </form>
     </dialog>
   </section>
 }

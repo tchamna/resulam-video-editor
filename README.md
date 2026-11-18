@@ -29,14 +29,14 @@ For karaoke captions, open the **Captions** tab and add a clip at the playhead. 
 - Drop a video onto the preview or main video track to place it and import it in one step. The first main video sets the canvas dimensions. Hover over a video in the media bin to preview it without sound.
 - Drag the bottom grip or **Alt+drag** a clip to move it. Drag its left or right edge to trim it. Click the time ruler to seek, or drag the playhead to scrub.
 - Drag the time ruler to select across unlocked tracks. Drag the body of a clip to select within that clip. Use **Select range** (**R**) or **Shift+drag** on a clip or lane to select time across clips on one track. Drag either blue handle to adjust the time range.
-- Use **Ctrl/Cmd+X**, **Ctrl/Cmd+C**, and **Ctrl/Cmd+V** to cut, copy, and paste clips or portions inside the editor. Paste inserts at the playhead (or at the start of the selected range) on the copied tracks. Cut closes the gap automatically. **Delete** leaves a gap, and **Shift+Delete** closes it. Open **Shortcuts** below the timeline for the full list.
+- Use **Ctrl/Cmd+X**, **Ctrl/Cmd+C**, and **Ctrl/Cmd+V** to cut, copy, and paste clips or portions inside the editor. Paste inserts at the playhead or at the start of the selected range on the copied tracks. Cut closes the gap automatically. **Delete** leaves a gap on ordinary tracks, and **Ctrl+Delete** closes it. Open **Shortcuts** below the timeline for the full list.
 - Add callouts in the Annotations tab. Double-click an annotation on the timeline or preview to edit it in Properties. Select an overlay in the preview and drag its corners to resize or its top handle to rotate.
 - Apply fades, pan and zoom, or a picture-in-picture preset in Effects. Edit the selected clip in Properties.
-- Click a track name to select all its clips. Use the eye to exclude the track from playback and export, the speaker to mute its audio, the magnet to control snapping on that track, and the lock to protect it from edits.
+- Click a track name to select all its clips. Use the eye to exclude the track from playback and export, the speaker to mute its audio, and the lock to protect it from edits. The track magnet closes gaps and lets you insert or rearrange clips in sequence. The toolbar **Snap** button aligns clips and selections to nearby edges.
 - Drag a track's top divider up to expand it or down to shrink it. Use the timeline zoom slider or its Fit button to see the project or the selected range.
 - Select a video or image and click **Crop** above the preview. Drag an edge or corner, then click **Done cropping**. Use **Crop edges** in Properties for exact values or to reset the crop.
 - Select a time range and click **Silence** to mute audio for that interval on the selected clip or unlocked tracks. Use **Clear silenced ranges** in Properties to restore a clip's audio.
-- Press **Space** to play or pause, **S** to split, and **Backspace** to delete the selected clip. Undo and redo are in the header.
+- Press **Space** to play or pause. If a time range is highlighted, playback stays within it and stops at its end. Use **,** or **.** to step by a frame, **S** to split selected media, or **Ctrl+Shift+S** to split all unlocked tracks at the playhead.
 
 ## Recording and export
 
