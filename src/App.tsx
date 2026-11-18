@@ -5,20 +5,11 @@ import { exportMP4, importFile } from './media'
 import { Inspector } from './Inspector'
 import { Preview, togglePlayback } from './Preview'
 import { ProjectFiles, type ProjectFileControls } from './ProjectFiles'
-import { writeDesktopFile } from './saveFile'
+import { downloadFile, writeDesktopFile } from './saveFile'
 import { Sidebar, type SidebarTab } from './Sidebar'
 import { Timeline, type TimelineControls } from './Timeline'
 import { ToolButton } from './ui'
 import { shortcutFor } from './shortcuts'
-
-function saveFile(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.download = name
-  link.href = url
-  link.click()
-  window.setTimeout(() => URL.revokeObjectURL(url), 30000)
-}
 
 export function App() {
   const files = useRef<HTMLInputElement>(null)
@@ -107,6 +98,7 @@ export function App() {
       }
       const addAnnotation = (kind: 'text' | 'karaoke') => {
         setSidebarTab(kind === 'text' ? 'Annotations' : 'Captions')
+        if (kind === 'karaoke') { state.addCaption(); return }
         state.play(false)
         const id = state.add(kind)
         if (id) {
@@ -203,7 +195,7 @@ export function App() {
         case 'frame': {
           if (!hasClips) break
           state.play(false)
-          previewCanvas.current?.toBlob(blob => { if (blob) saveFile(blob, `Frame-${timecode(state.currentTime).replaceAll(':', '-')}.png`) })
+          previewCanvas.current?.toBlob(blob => { if (blob) downloadFile(blob, `Frame-${timecode(state.currentTime).replaceAll(':', '-')}.png`) })
           break
         }
         case 'export': void exportProject(); break
@@ -231,7 +223,7 @@ export function App() {
     }
   }, [exporting, exportDisabled, hasClips, importing, recordPending, recording, title])
 
-  async function importMedia(list: FileList | File[], dropTime?: number) {
+  async function importMedia(list: FileList | File[], dropTime?: number, dropTrack: 'main' | 'audio' = 'main') {
     if (!list.length || exporting || importing) return
     setImporting(true)
     try {
@@ -240,11 +232,11 @@ export function App() {
       const failed = result.filter(item => item.status === 'rejected').length
       const state = useEditor.getState()
       state.addAssets(imported)
-      if (dropTime !== undefined && !state.tracks.find(track => track.id === 'main')?.locked) {
+      if (dropTime !== undefined && !state.tracks.find(track => track.id === dropTrack)?.locked) {
         let position = dropTime
         let first: { id: string; start: number } | undefined
-        for (const asset of imported.filter(item => item.kind === 'video')) {
-          const id = state.add(asset, position, 'main')
+        for (const asset of imported.filter(item => item.kind === (dropTrack === 'audio' ? 'audio' : 'video'))) {
+          const id = state.add(asset, position, dropTrack)
           const clip = useEditor.getState().clips.find(item => item.id === id)
           if (!clip) continue
           first ??= clip
@@ -395,11 +387,11 @@ export function App() {
     dragDepth.current = 0
     setFileDrag(false)
     const target = event.target instanceof Element ? event.target : null
-    const lane = target?.closest('[data-lane="main"]')
+    const lane = target?.closest<HTMLElement>('[data-lane="main"], [data-lane="audio"]')
     const { currentTime, zoomLevel } = useEditor.getState()
     const start = lane ? Math.max(0, (event.clientX - lane.getBoundingClientRect().left) / zoomLevel)
       : target?.closest('[data-preview-drop]') ? currentTime : undefined
-    void importMedia(Array.from(event.dataTransfer.files), start)
+    void importMedia(Array.from(event.dataTransfer.files), start, lane?.dataset.lane === 'audio' ? 'audio' : 'main')
   }
   return <div className="editor-shell"
     onDragEnter={event => { if (hasFiles(event) && !exporting) { event.preventDefault(); dragDepth.current++; setFileDrag(true) } }}

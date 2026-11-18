@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent, type RefObject } from '
 import { ChevronDown, Crop, Pause, Play, SkipBack, SkipForward } from 'lucide-react'
 import { canCrop, canvasSizeOf, clamp, durationOf, EMPTY_CROP, timecode, useEditor } from './store'
 import { cropRect, enableAudio, frameOf, opacityAt, preloadMedia, renderFrame, stopMedia, visibleClips } from './media'
-import { loadKaraokeFont } from './karaokeCanvas'
+import { karaokeLanguageAt, loadKaraokeFont } from './karaokeCanvas'
 import { ITEM_TYPE } from './Timeline'
 import { pointerGesture, ToolButton } from './ui'
 
@@ -138,6 +138,20 @@ export function Preview({ exporting, canvas, spaceGesture }: {
     return () => { cancelAnimationFrame(raf); unsubscribe(); stopMedia() }
   }, [canvas, exporting, frameWidth, frameHeight, cropping])
 
+  function captionAt(clientX: number, clientY: number) {
+    const ctx = canvas.current?.getContext('2d')
+    const bounds = display.current?.getBoundingClientRect()
+    if (!ctx || !bounds?.width || !bounds.height) return
+    const x = (clientX - bounds.left) * frameWidth / bounds.width
+    const y = (clientY - bounds.top) * frameHeight / bounds.height
+    const { currentTime, tracks } = useEditor.getState()
+    for (const clip of visibleClips(currentTime).reverse()) {
+      if (!clip.karaoke || opacityAt(clip, currentTime) === 0) continue
+      const language = karaokeLanguageAt(ctx, clip.karaoke, clip.offset + (currentTime - clip.start) * clip.speed, x, y)
+      if (language) return { clip, language, locked: tracks.some(track => track.id === clip.track && track.locked) }
+    }
+  }
+
   function startGesture(event: PointerEvent<HTMLCanvasElement>) {
     if (exporting || event.button !== 0) return
     if (spaceGesture.current.held && stage.current) {
@@ -153,6 +167,7 @@ export function Preview({ exporting, canvas, spaceGesture }: {
       return
     }
     const state = useEditor.getState()
+    if (!cropping && !event.altKey && captionAt(event.clientX, event.clientY)) return
     const bounds = event.currentTarget.getBoundingClientRect()
     if (!bounds.width || !bounds.height) return
     const size = { width: frameWidth, height: frameHeight }
@@ -284,8 +299,15 @@ export function Preview({ exporting, canvas, spaceGesture }: {
     }}>
       <div className="canvas-wrap" style={{ width, height: width * frameHeight / frameWidth }}>
         <canvas ref={canvas} width={frameWidth} height={frameHeight} aria-label="Video preview" />
-        <canvas ref={display} width={frameWidth} height={frameHeight} className={`canvas-controls ${cropping ? 'cropping' : ''}`} aria-label={cropping ? 'Canvas crop controls' : 'Canvas overlay controls'} onPointerDown={startGesture}
-          onDoubleClick={() => { const state = useEditor.getState(); if (!exporting && state.selectedClipId) state.editAnnotation(state.selectedClipId) }} />
+          <canvas ref={display} width={frameWidth} height={frameHeight} className={`canvas-controls ${cropping ? 'cropping' : ''}`} aria-label={cropping ? 'Canvas crop controls' : 'Canvas overlay controls'} onPointerDown={startGesture}
+            onDoubleClick={event => {
+              if (exporting || cropping) return
+              const state = useEditor.getState()
+              const hit = captionAt(event.clientX, event.clientY)
+              if (hit) {
+                if (!hit.locked) state.editAnnotation(hit.clip.id, state.currentTime, hit.language)
+              } else if (state.selectedClipId) state.editAnnotation(state.selectedClipId)
+            }} />
       </div>
     </div>
     <div className="transport">

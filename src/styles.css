@@ -66,8 +66,10 @@ h2{margin:0;font-size:13px;line-height:1.25;font-weight:650;letter-spacing:.005e
 .karaoke-file input{display:block;max-width:100%;font-size:10px}
 .karaoke-file input::file-selector-button{background:#253340;border-radius:4px;padding:3px 5px;margin-right:4px;cursor:pointer}
 .secondary-lyrics{margin:4px 0 8px}
+.cue-playhead{width:100%;margin:4px 0 7px;padding-inline:4px}
+.caption-exports{display:grid;gap:7px;margin-top:18px}
+.caption-exports p{color:var(--muted);font-size:11px;margin:0}
 .karaoke-preset{display:flex;gap:6px;margin-bottom:8px}
-.karaoke-apply{margin-top:8px}
 .karaoke-section .inspector-range{margin-top:7px}
 @media(max-width:1150px){.sidebar-tabs button{flex-direction:column;gap:2px}}
 .library-heading{display:flex;justify-content:space-between;align-items:center;margin:0 0 15px}
@@ -179,6 +181,7 @@ h2{margin:0;font-size:13px;line-height:1.25;font-weight:650;letter-spacing:.005e
 .track-glyph{width:23px;height:23px;border-radius:5px;display:grid;place-items:center;flex:none}
 .track-glyph.annotations{color:#c6a9fa;background:#33294a}
 .track-glyph.overlay{color:#a5b9ff;background:#283653}
+.track-glyph.audio{color:#9fd9e8;background:#233d48}
 .track-glyph.main{color:#a4ecd3;background:#233e36}
 .track-info{flex:1;min-width:0;line-height:1.17}
 .track-info span,.track-info strong{display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
@@ -199,6 +202,7 @@ h2{margin:0;font-size:13px;line-height:1.25;font-weight:650;letter-spacing:.005e
 .timeline-clip.annotations{--clip-edge:#6f5597;--clip-fill:#433357;--clip-text:#e7d7fc}
 .timeline-clip.overlay{--clip-edge:#4c6298;--clip-fill:#303e64;--clip-text:#dbe5ff}
 .timeline-clip.main{--clip-edge:#407868;--clip-fill:#24463d;--clip-text:#dcf6ec}
+.timeline-clip.audio{--clip-edge:#477488;--clip-fill:#284553;--clip-text:#dfedf4}
 .timeline-clip:hover{filter:brightness(1.13)}
 .timeline-clip.selected{border:1px solid var(--mint);box-shadow:0 0 0 1px #73ebba33;z-index:2}
 .timeline-clip.locked{cursor:default}
